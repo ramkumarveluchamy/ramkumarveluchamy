@@ -116,7 +116,102 @@ function initializeDatabase() {
       notes TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- Lawn maintenance (separate from home repairs)
+    CREATE TABLE IF NOT EXISTS lawn_maintenance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      service_type TEXT NOT NULL,
+      provider TEXT,
+      cost REAL NOT NULL,
+      notes TEXT,
+      is_recurring INTEGER DEFAULT 0,
+      frequency TEXT
+    );
+
+    -- Stock / brokerage holdings (manual entry)
+    CREATE TABLE IF NOT EXISTS stocks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticker TEXT NOT NULL,
+      name TEXT,
+      shares REAL NOT NULL,
+      purchase_price REAL NOT NULL,
+      current_price REAL,
+      purchase_date TEXT,
+      account_type TEXT DEFAULT 'brokerage',
+      notes TEXT,
+      last_updated TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Retirement accounts: 401k, Roth IRA, Traditional IRA, 403b, pension
+    CREATE TABLE IF NOT EXISTS retirement_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_type TEXT NOT NULL,
+      institution TEXT,
+      balance REAL NOT NULL DEFAULT 0,
+      contribution_ytd REAL DEFAULT 0,
+      employer_match_ytd REAL DEFAULT 0,
+      contribution_limit REAL,
+      notes TEXT,
+      last_updated TEXT DEFAULT (datetime('now'))
+    );
+
+    -- HSA / FSA accounts
+    CREATE TABLE IF NOT EXISTS health_savings_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_type TEXT NOT NULL,
+      institution TEXT,
+      balance REAL NOT NULL DEFAULT 0,
+      contribution_ytd REAL DEFAULT 0,
+      contribution_limit REAL,
+      notes TEXT,
+      last_updated TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS health_savings_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      date TEXT NOT NULL,
+      description TEXT,
+      category TEXT DEFAULT 'Medical',
+      FOREIGN KEY (account_id) REFERENCES health_savings_accounts(id) ON DELETE CASCADE
+    );
+
+    -- Debt tracking (credit cards, student loans, auto, personal, medical, etc.)
+    CREATE TABLE IF NOT EXISTS debts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      debt_type TEXT NOT NULL,
+      original_amount REAL NOT NULL,
+      current_balance REAL NOT NULL,
+      interest_rate REAL DEFAULT 0,
+      minimum_payment REAL DEFAULT 0,
+      due_day INTEGER,
+      institution TEXT,
+      notes TEXT,
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS debt_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      debt_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      date TEXT NOT NULL,
+      notes TEXT,
+      FOREIGN KEY (debt_id) REFERENCES debts(id) ON DELETE CASCADE
+    );
   `);
+
+  // Migrate home_maintenance to add new columns if upgrading from prior version
+  const hmCols = db.prepare('PRAGMA table_info(home_maintenance)').all().map(c => c.name);
+  if (!hmCols.includes('category')) {
+    db.exec("ALTER TABLE home_maintenance ADD COLUMN category TEXT DEFAULT 'General'");
+  }
+  if (!hmCols.includes('urgency')) {
+    db.exec("ALTER TABLE home_maintenance ADD COLUMN urgency TEXT DEFAULT 'routine'");
+  }
 }
 
 initializeDatabase();

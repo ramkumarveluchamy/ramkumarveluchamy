@@ -12,6 +12,9 @@ import Mortgage from './pages/Mortgage';
 import Education from './pages/Education';
 import Budget from './pages/Budget';
 import Reports from './pages/Reports';
+import Investments from './pages/Investments';
+import Debts from './pages/Debts';
+import Import from './pages/Import';
 
 function ProtectedRoute({ children }) {
   const { token, loading } = useAuth();
@@ -49,6 +52,9 @@ function AppRoutes() {
         <Route path="education" element={<Education />} />
         <Route path="budget" element={<Budget />} />
         <Route path="reports" element={<Reports />} />
+        <Route path="investments" element={<Investments />} />
+        <Route path="debts" element={<Debts />} />
+        <Route path="import" element={<Import />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

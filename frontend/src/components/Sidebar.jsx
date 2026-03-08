@@ -4,18 +4,40 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import {
   LayoutDashboard, TrendingUp, CreditCard, Receipt, Home, GraduationCap,
-  PieChart, BarChart3, LogOut, Moon, Sun, DollarSign
+  PieChart, BarChart3, LogOut, Moon, Sun, DollarSign, TrendingDown,
+  Upload, Wallet
 } from 'lucide-react';
 
-const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true },
-  { to: '/income', icon: TrendingUp, label: 'Income' },
-  { to: '/expenses', icon: CreditCard, label: 'Expenses' },
-  { to: '/bills', icon: Receipt, label: 'Bills' },
-  { to: '/mortgage', icon: Home, label: 'Mortgage & Housing' },
-  { to: '/education', icon: GraduationCap, label: 'Kids Education' },
-  { to: '/budget', icon: PieChart, label: 'Budget Planner' },
-  { to: '/reports', icon: BarChart3, label: 'Reports' },
+const navGroups = [
+  {
+    label: 'Overview',
+    items: [{ to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true }],
+  },
+  {
+    label: 'Cash Flow',
+    items: [
+      { to: '/income', icon: TrendingUp, label: 'Income' },
+      { to: '/expenses', icon: CreditCard, label: 'Expenses' },
+      { to: '/bills', icon: Receipt, label: 'Bills' },
+    ],
+  },
+  {
+    label: 'Assets & Debts',
+    items: [
+      { to: '/investments', icon: Wallet, label: 'Investments & Savings' },
+      { to: '/debts', icon: TrendingDown, label: 'Debt Tracker' },
+      { to: '/mortgage', icon: Home, label: 'Mortgage & Housing' },
+      { to: '/education', icon: GraduationCap, label: 'Kids Education' },
+    ],
+  },
+  {
+    label: 'Planning',
+    items: [
+      { to: '/budget', icon: PieChart, label: 'Budget Planner' },
+      { to: '/reports', icon: BarChart3, label: 'Reports' },
+      { to: '/import', icon: Upload, label: 'Import Statement' },
+    ],
+  },
 ];
 
 export default function Sidebar() {
@@ -39,23 +61,27 @@ export default function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {navItems.map(({ to, icon: Icon, label, exact }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={exact}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                isActive
-                  ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
-                  : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white'
-              }`
-            }
-          >
-            <Icon className="w-5 h-5 flex-shrink-0" />
-            {label}
-          </NavLink>
+      <nav className="flex-1 px-3 py-4 space-y-5 overflow-y-auto">
+        {navGroups.map(group => (
+          <div key={group.label}>
+            <div className="px-3 mb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">{group.label}</div>
+            <div className="space-y-0.5">
+              {group.items.map(({ to, icon: Icon, label, exact }) => (
+                <NavLink key={to} to={to} end={exact}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                      isActive
+                        ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white'
+                    }`
+                  }
+                >
+                  <Icon className="w-5 h-5 flex-shrink-0" />
+                  {label}
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
 

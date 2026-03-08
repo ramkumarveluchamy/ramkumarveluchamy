@@ -19,6 +19,9 @@ app.use('/api/mortgage', require('./routes/mortgage'));
 app.use('/api/education', require('./routes/education'));
 app.use('/api/budgets', require('./routes/budgets'));
 app.use('/api/reports', require('./routes/reports'));
+app.use('/api/investments', require('./routes/investments'));
+app.use('/api/debts', require('./routes/debts'));
+app.use('/api/import', require('./routes/import'));
 
 // Serve frontend in production
 if (process.env.NODE_ENV === 'production') {

@@ -94,4 +94,50 @@ router.get('/utilities/trends', (req, res) => {
   res.json(rows);
 });
 
+// ─── Lawn Maintenance ────────────────────────────────────────────────────────
+
+router.get('/lawn', (req, res) => {
+  const { year } = req.query;
+  let query = 'SELECT * FROM lawn_maintenance WHERE 1=1';
+  const params = [];
+  if (year) { query += ' AND date LIKE ?'; params.push(`${year}%`); }
+  query += ' ORDER BY date DESC';
+  const rows = db.prepare(query).all(...params);
+  const total = rows.reduce((s, r) => s + r.cost, 0);
+  res.json({ items: rows, total });
+});
+
+router.post('/lawn', (req, res) => {
+  const { date, service_type, provider, cost, notes, is_recurring, frequency } = req.body;
+  if (!date || !service_type || cost === undefined) {
+    return res.status(400).json({ error: 'Date, service type, and cost are required' });
+  }
+  const result = db.prepare(
+    'INSERT INTO lawn_maintenance (date, service_type, provider, cost, notes, is_recurring, frequency) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(date, service_type, provider || null, cost, notes || null, is_recurring ? 1 : 0, frequency || null);
+  res.status(201).json({ id: result.lastInsertRowid });
+});
+
+router.put('/lawn/:id', (req, res) => {
+  const { date, service_type, provider, cost, notes, is_recurring, frequency } = req.body;
+  db.prepare(
+    'UPDATE lawn_maintenance SET date=?, service_type=?, provider=?, cost=?, notes=?, is_recurring=?, frequency=? WHERE id=?'
+  ).run(date, service_type, provider || null, cost, notes || null, is_recurring ? 1 : 0, frequency || null, req.params.id);
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/lawn/:id', (req, res) => {
+  db.prepare('DELETE FROM lawn_maintenance WHERE id = ?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
+// Update home_maintenance to support category and urgency
+router.put('/maintenance/:id', (req, res) => {
+  const { date, description, cost, category, urgency } = req.body;
+  db.prepare(
+    'UPDATE home_maintenance SET date=?, description=?, cost=?, category=?, urgency=? WHERE id=?'
+  ).run(date, description, cost, category || 'General', urgency || 'routine', req.params.id);
+  res.json({ message: 'Updated' });
+});
+
 module.exports = router;
