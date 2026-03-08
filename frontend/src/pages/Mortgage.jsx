@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Home, Wrench, Zap, Leaf, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, Home, Wrench, Zap } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import api from '../api/client';
 import Modal from '../components/Modal';
@@ -7,9 +7,6 @@ import { format } from 'date-fns';
 
 const UTILITY_TYPES = ['Electric', 'Water', 'Gas', 'Internet'];
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const LAWN_SERVICE_TYPES = ['Mowing', 'Fertilizing', 'Seeding', 'Aeration', 'Trimming/Edging', 'Mulching', 'Leaf Removal', 'Snow Removal', 'Weed Control', 'Other'];
-const MAINTENANCE_CATEGORIES = ['General', 'Plumbing', 'Electrical', 'HVAC', 'Roofing', 'Appliances', 'Painting', 'Flooring', 'Foundation', 'Windows/Doors', 'Other'];
-const URGENCY_LEVELS = ['routine', 'urgent', 'emergency'];
 
 function MortgageForm({ initial, onSave, onClose }) {
   const [form, setForm] = useState(initial || {
@@ -84,24 +81,17 @@ export default function Mortgage() {
   const [mortgage, setMortgage] = useState(null);
   const [maintenance, setMaintenance] = useState({ items: [], total: 0 });
   const [utilities, setUtilities] = useState([]);
-  const [lawn, setLawn] = useState({ items: [], total: 0 });
   const [modal, setModal] = useState(null);
   const [activeTab, setActiveTab] = useState('mortgage');
-  const [lawnForm, setLawnForm] = useState({
-    date: format(new Date(), 'yyyy-MM-dd'), service_type: 'Mowing',
-    provider: '', cost: '', notes: '', is_recurring: false, frequency: 'monthly',
-  });
 
   const now = new Date();
   const [utilMonth, setUtilMonth] = useState(now.getMonth() + 1);
   const [utilYear, setUtilYear] = useState(now.getFullYear());
   const [utilForm, setUtilForm] = useState({ type: 'Electric', amount: '' });
-  const lawnYear = now.getFullYear();
 
   useEffect(() => {
     api.get('/mortgage').then(r => setMortgage(r.data));
     api.get('/mortgage/maintenance').then(r => setMaintenance(r.data));
-    api.get(`/mortgage/lawn?year=${lawnYear}`).then(r => setLawn(r.data));
   }, []);
 
   useEffect(() => {
@@ -126,23 +116,9 @@ export default function Mortgage() {
     api.get('/mortgage/maintenance').then(r => setMaintenance(r.data));
   };
 
-  const saveLawn = async e => {
-    e.preventDefault();
-    await api.post('/mortgage/lawn', lawnForm);
-    api.get(`/mortgage/lawn?year=${lawnYear}`).then(r => setLawn(r.data));
-    setLawnForm(f => ({ ...f, cost: '', notes: '' }));
-  };
-
-  const deleteLawn = async (id) => {
-    if (!confirm('Delete this lawn maintenance record?')) return;
-    await api.delete(`/mortgage/lawn/${id}`);
-    api.get(`/mortgage/lawn?year=${lawnYear}`).then(r => setLawn(r.data));
-  };
-
   const tabs = [
     { id: 'mortgage', label: 'Mortgage', icon: Home },
     { id: 'maintenance', label: 'Home Repairs', icon: Wrench },
-    { id: 'lawn', label: 'Lawn Care', icon: Leaf },
     { id: 'utilities', label: 'Utilities', icon: Zap },
   ];
 
@@ -239,91 +215,6 @@ export default function Mortgage() {
                   <div className="flex items-center gap-3">
                     <span className="font-bold text-red-600">${item.cost.toFixed(2)}</span>
                     <button onClick={() => deleteMaintenance(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Lawn Care tab */}
-      {activeTab === 'lawn' && (
-        <div className="space-y-4">
-          <div className="card">
-            <h3 className="font-medium text-gray-900 dark:text-white mb-4">Log Lawn Service — {lawnYear}</h3>
-            <form onSubmit={saveLawn} className="space-y-3">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div><label className="label">Date</label>
-                  <input type="date" className="input" value={lawnForm.date}
-                    onChange={e => setLawnForm(f => ({ ...f, date: e.target.value }))} /></div>
-                <div><label className="label">Service Type</label>
-                  <select className="input" value={lawnForm.service_type}
-                    onChange={e => setLawnForm(f => ({ ...f, service_type: e.target.value }))}>
-                    {LAWN_SERVICE_TYPES.map(t => <option key={t}>{t}</option>)}
-                  </select></div>
-                <div><label className="label">Provider</label>
-                  <input type="text" className="input" value={lawnForm.provider}
-                    onChange={e => setLawnForm(f => ({ ...f, provider: e.target.value }))}
-                    placeholder="TruGreen, DIY..." /></div>
-                <div><label className="label">Cost ($)</label>
-                  <input type="number" step="0.01" className="input" value={lawnForm.cost}
-                    onChange={e => setLawnForm(f => ({ ...f, cost: e.target.value }))} required /></div>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <input type="checkbox" id="lawnRec" checked={lawnForm.is_recurring}
-                    onChange={e => setLawnForm(f => ({ ...f, is_recurring: e.target.checked }))} className="w-4 h-4" />
-                  <label htmlFor="lawnRec" className="text-sm text-gray-700 dark:text-gray-200 flex items-center gap-1">
-                    <RefreshCw className="w-3.5 h-3.5" /> Recurring
-                  </label>
-                </div>
-                {lawnForm.is_recurring && (
-                  <select className="input w-36 text-sm" value={lawnForm.frequency}
-                    onChange={e => setLawnForm(f => ({ ...f, frequency: e.target.value }))}>
-                    {['weekly', 'bi-weekly', 'monthly', 'seasonal', 'annual'].map(f => <option key={f}>{f}</option>)}
-                  </select>
-                )}
-                <input type="text" className="input flex-1" value={lawnForm.notes}
-                  onChange={e => setLawnForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes..." />
-                <button type="submit" className="btn-primary whitespace-nowrap">Log Service</button>
-              </div>
-            </form>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-gray-500">
-              {lawnYear} Total: <span className="font-bold text-green-700 dark:text-green-400">${lawn.total.toFixed(2)}</span>
-            </div>
-          </div>
-
-          {lawn.items.length === 0 ? (
-            <div className="card text-center py-12 text-gray-400">
-              <Leaf className="w-12 h-12 mx-auto mb-3 opacity-30" />No lawn maintenance records yet.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {lawn.items.map(item => (
-                <div key={item.id} className="card flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                      <Leaf className="w-4 h-4 text-green-600" />
-                    </div>
-                    <div>
-                      <div className="font-medium text-gray-900 dark:text-white">{item.service_type}</div>
-                      <div className="text-xs text-gray-500 flex gap-2">
-                        <span>{item.date}</span>
-                        {item.provider && <span>· {item.provider}</span>}
-                        {item.is_recurring && <span className="text-blue-500">· {item.frequency}</span>}
-                        {item.notes && <span>· {item.notes}</span>}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-bold text-green-700 dark:text-green-400">${item.cost.toFixed(2)}</span>
-                    <button onClick={() => deleteLawn(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>

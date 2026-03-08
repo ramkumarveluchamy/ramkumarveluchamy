@@ -15,6 +15,7 @@ import Reports from './pages/Reports';
 import Investments from './pages/Investments';
 import Debts from './pages/Debts';
 import Import from './pages/Import';
+import HomeMaintenance from './pages/HomeMaintenance';
 
 function ProtectedRoute({ children }) {
   const { token, loading } = useAuth();
@@ -49,6 +50,7 @@ function AppRoutes() {
         <Route path="expenses" element={<Expenses />} />
         <Route path="bills" element={<Bills />} />
         <Route path="mortgage" element={<Mortgage />} />
+        <Route path="home-maintenance" element={<HomeMaintenance />} />
         <Route path="education" element={<Education />} />
         <Route path="budget" element={<Budget />} />
         <Route path="reports" element={<Reports />} />

@@ -5,7 +5,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   LayoutDashboard, TrendingUp, CreditCard, Receipt, Home, GraduationCap,
   PieChart, BarChart3, LogOut, Moon, Sun, DollarSign, TrendingDown,
-  Upload, Wallet
+  Upload, Wallet, Wrench
 } from 'lucide-react';
 
 const navGroups = [
@@ -27,6 +27,7 @@ const navGroups = [
       { to: '/investments', icon: Wallet, label: 'Investments & Savings' },
       { to: '/debts', icon: TrendingDown, label: 'Debt Tracker' },
       { to: '/mortgage', icon: Home, label: 'Mortgage & Housing' },
+      { to: '/home-maintenance', icon: Wrench, label: 'Home Maintenance' },
       { to: '/education', icon: GraduationCap, label: 'Kids Education' },
     ],
   },
