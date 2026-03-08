@@ -46,7 +46,7 @@ sudo apt-get update -qq && sudo apt-get upgrade -y -qq
 
 # ─── 2. Node.js ──────────────────────────────────────────────────────────────
 echo "→ Installing Node.js ${NODE_VERSION}..."
-curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | sudo -E bash - -qq
+curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | sudo -E bash -
 sudo apt-get install -y nodejs -qq
 echo "   Node: $(node --version) | npm: $(npm --version)"
 
