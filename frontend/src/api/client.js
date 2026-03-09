@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const api = axios.create({ baseURL: '/api' });
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, ''); // e.g. '/finance' or ''
+
+const api = axios.create({ baseURL: `${BASE}/api` });
 
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('finance_token');
@@ -13,7 +15,7 @@ api.interceptors.response.use(
   err => {
     if (err.response?.status === 401) {
       localStorage.removeItem('finance_token');
-      window.location.href = '/login';
+      window.location.href = `${BASE}/login`;
     }
     return Promise.reject(err);
   }
