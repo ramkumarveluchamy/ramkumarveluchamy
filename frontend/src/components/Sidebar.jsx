@@ -49,7 +49,7 @@ export default function Sidebar() {
   const handleLogout = () => { logout(); navigate('/login'); };
 
   return (
-    <aside className="hidden md:flex flex-col w-64 min-h-screen bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 fixed top-0 left-0 z-40">
+    <aside className="hidden md:flex flex-col w-64 h-screen bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 fixed top-0 left-0 z-40">
       {/* Logo */}
       <div className="flex items-center gap-3 px-6 py-5 border-b border-gray-100 dark:border-gray-700">
         <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center">
