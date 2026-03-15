@@ -56,5 +56,12 @@
 ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 
+/* Sidebar nav scrollbar - always visible with contrast against dark bg */
+.sidebar-nav { scrollbar-width: thin; scrollbar-color: #4b5563 transparent; }
+.sidebar-nav::-webkit-scrollbar { width: 4px; }
+.sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+.sidebar-nav::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+.sidebar-nav::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+
 /* Progress bar animation */
 .progress-bar { transition: width 0.5s ease-in-out; }
