@@ -62,7 +62,7 @@ export default function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-5 overflow-y-auto">
+      <nav className="flex-1 px-3 py-4 space-y-5 overflow-y-scroll">
         {navGroups.map(group => (
           <div key={group.label}>
             <div className="px-3 mb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">{group.label}</div>
