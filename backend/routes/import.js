@@ -512,6 +512,19 @@ router.post('/credit-card', upload.single('statement'), async (req, res) => {
       result = await parseWithClaude(null, true, req.file.buffer);
     }
 
+    // ── Post-process: enforce credit/payment detection on every transaction ──
+    // This runs regardless of which parser was used, catching any misclassified rows.
+    result.transactions = result.transactions
+      .filter(t => !isCardPayment(t.description))   // drop card payments
+      .map(t => {
+        if (isStatementCredit(t.description)) {
+          return { ...t, type: 'credit' };
+        }
+        return t;
+      });
+
+    console.log(`[import] bank=${result.bank} total=${result.transactions.length} credits=${result.transactions.filter(t=>t.type==='credit').length} payments filtered`);
+
     res.json({
       count: result.transactions.length,
       transactions: result.transactions,
