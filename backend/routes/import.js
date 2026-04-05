@@ -118,6 +118,7 @@ function detectAndParseCSV(buffer) {
         .map(r => {
           const raw = parseFloat(r['Amount']) || 0;
           const desc = r['Description'].trim();
+          if (isCardPayment(desc)) return null;
           const isCredit = raw < 0 || isStatementCredit(desc);
           return {
             date: normalizeDate(r['Date']),
@@ -127,18 +128,20 @@ function detectAndParseCSV(buffer) {
             suggested_category: mapAmexCategory(r['Category'] || desc),
           };
         })
-        .filter(r => r.amount > 0),
+        .filter(r => r && r.amount > 0),
     };
   }
-  // Amex simple format (3-column)
-  if (headers.length <= 5 && headers.includes('Date') && headers.includes('Description') && headers.includes('Amount')
-      && !headers.includes('Debit') && !headers.includes('Payee') && !headers.includes('Balance')) {
+  // Amex simple format (up to 6 columns: Date, Description, Card Member, Account #, Amount + optional extra)
+  if (headers.includes('Date') && headers.includes('Description') && headers.includes('Amount')
+      && !headers.includes('Debit') && !headers.includes('Payee') && !headers.includes('Balance')
+      && !headers.includes('Transaction Date') && !headers.includes('Details')) {
     return {
       bank: 'American Express',
       transactions: records
         .map(r => {
           const raw = parseFloat(r['Amount']) || 0;
           const desc = r['Description'].trim();
+          if (isCardPayment(desc)) return null;
           const isCredit = raw < 0 || isStatementCredit(desc);
           return {
             date: normalizeDate(r['Date']),
@@ -148,7 +151,7 @@ function detectAndParseCSV(buffer) {
             suggested_category: mapAmexCategory(desc),
           };
         })
-        .filter(r => r.amount > 0),
+        .filter(r => r && r.amount > 0),
     };
   }
 
@@ -291,15 +294,26 @@ function detectAndParseCSV(buffer) {
       transactions: records
         .map(r => {
           const raw = parseFloat((r[amtCol] || '').replace(/[$,]/g, '')) || 0;
+          const desc = (r[descCol] || '').trim();
+          // Skip card payments entirely
+          if (isCardPayment(desc)) return null;
+          // Check description for credits/refunds before using amount sign
+          let type;
+          if (isStatementCredit(desc)) {
+            type = 'credit';
+          } else {
+            // Negative = expense for most formats (checking/Amex); positive = income
+            type = raw < 0 ? 'expense' : 'income';
+          }
           return {
             date: normalizeDate(r[dateCol]),
-            description: (r[descCol] || '').trim(),
+            description: desc,
             amount: Math.abs(raw),
-            type: raw < 0 ? 'expense' : 'income',
-            suggested_category: 'Miscellaneous',
+            type,
+            suggested_category: type === 'income' ? 'Income' : mapAmexCategory(desc),
           };
         })
-        .filter(r => r.amount > 0 && r.description),
+        .filter(r => r && r.amount > 0 && r.description),
     };
   }
 
@@ -338,8 +352,16 @@ function normalizeDate(raw) {
 // Uber Cash, Saks credit, etc.) and generic merchant refunds.
 function isStatementCredit(desc) {
   if (!desc) return false;
+  // Match standalone "credit", "refund", "return" etc. OR compound Amex benefit phrases
   return /\b(credit|refund|return|reversal|adjustment|cashback|cash back|reward|rebate|reimbursement)\b/i.test(desc)
-    || /statement credit|platinum credit|benefit credit|travel credit|airline fee|hotel credit|dining credit|entertainment credit|digital credit|walmart\+|uber cash|saks/i.test(desc);
+    || /platinum\s+\w.*credit|statement credit|benefit credit|travel credit|airline fee|hotel credit|dining credit|entertainment credit|digital credit|walmart\+|uber cash|saks/i.test(desc);
+}
+
+// Detects credit card payments (not purchases) — should be excluded from import
+function isCardPayment(desc) {
+  if (!desc) return false;
+  return /\b(payment|autopay|auto\s*pay)\b/i.test(desc)
+    || /mobile payment|online payment|thank you|ach payment|electronic payment|bill payment/i.test(desc);
 }
 
 // ─── Category mapping ───────────────────────────────────────────────────────
