@@ -39,18 +39,24 @@ function detectAndParseCSV(buffer) {
 
   // ── Chase Credit Card ──
   // Headers: Transaction Date, Post Date, Description, Category, Type, Amount
+  // Type values: Sale, Return, Payment, Adjustment
   if (headers.includes('Transaction Date') && headers.includes('Category') && headers.includes('Type') && headers.includes('Amount')) {
     return {
       bank: 'Chase Credit Card',
       transactions: records
-        .filter(r => r['Type'] !== 'Payment' && r['Type'] !== 'Adjustment')
-        .map(r => ({
-          date: normalizeDate(r['Transaction Date']),
-          description: r['Description'].trim(),
-          amount: Math.abs(parseFloat(r['Amount']) || 0),
-          type: parseFloat(r['Amount']) > 0 ? 'income' : 'expense',
-          suggested_category: mapChaseCategory(r['Category'] || ''),
-        }))
+        .filter(r => r['Type'] !== 'Payment')
+        .map(r => {
+          const amt = parseFloat(r['Amount']) || 0;
+          // Charges are negative on Chase CC, credits/returns are positive
+          const type = r['Type'] === 'Return' || amt > 0 ? 'credit' : 'expense';
+          return {
+            date: normalizeDate(r['Transaction Date']),
+            description: r['Description'].trim(),
+            amount: Math.abs(amt),
+            type,
+            suggested_category: mapChaseCategory(r['Category'] || ''),
+          };
+        })
         .filter(r => r.amount > 0),
     };
   }
@@ -85,16 +91,18 @@ function detectAndParseCSV(buffer) {
       transactions: records
         .map(r => {
           const amt = parseFloat(r['Amount']) || 0;
-          // Discover: charges are negative, payments are positive
+          const desc = r['Description'].trim();
+          // Discover: charges are negative, credits/refunds are positive
+          const type = amt > 0 ? (isStatementCredit(desc) ? 'credit' : 'credit') : 'expense';
           return {
             date: normalizeDate(r[dateCol]),
-            description: r['Description'].trim(),
+            description: desc,
             amount: Math.abs(amt),
-            type: amt > 0 ? 'income' : 'expense',
+            type,
             suggested_category: mapDiscoverCategory(catCol ? r[catCol] : ''),
           };
         })
-        .filter(r => r.amount > 0 && r.type === 'expense'),
+        .filter(r => r.amount > 0),
     };
   }
 
@@ -102,19 +110,23 @@ function detectAndParseCSV(buffer) {
   // Format 1: Date, Description, Amount (simple)
   // Format 2: Date, Reference, Description, Card Member, Account #, Amount
   // Format 3: Date, Receipt, Description, Amount
-  // Amex amounts are positive for charges
+  // Amex: charges are positive, statement credits/refunds are negative OR have credit keywords in description
   if (headerStr.includes('reference') && headers.includes('Amount') && headers.includes('Description')) {
     return {
       bank: 'American Express',
       transactions: records
-        .filter(r => parseFloat(r['Amount']) > 0)
-        .map(r => ({
-          date: normalizeDate(r['Date']),
-          description: r['Description'].trim(),
-          amount: Math.abs(parseFloat(r['Amount']) || 0),
-          type: 'expense',
-          suggested_category: mapAmexCategory(r['Category'] || r['Description']),
-        }))
+        .map(r => {
+          const raw = parseFloat(r['Amount']) || 0;
+          const desc = r['Description'].trim();
+          const isCredit = raw < 0 || isStatementCredit(desc);
+          return {
+            date: normalizeDate(r['Date']),
+            description: desc,
+            amount: Math.abs(raw),
+            type: isCredit ? 'credit' : 'expense',
+            suggested_category: mapAmexCategory(r['Category'] || desc),
+          };
+        })
         .filter(r => r.amount > 0),
     };
   }
@@ -124,14 +136,18 @@ function detectAndParseCSV(buffer) {
     return {
       bank: 'American Express',
       transactions: records
-        .filter(r => parseFloat(r['Amount']) > 0)
-        .map(r => ({
-          date: normalizeDate(r['Date']),
-          description: r['Description'].trim(),
-          amount: Math.abs(parseFloat(r['Amount']) || 0),
-          type: 'expense',
-          suggested_category: mapAmexCategory(r['Description']),
-        }))
+        .map(r => {
+          const raw = parseFloat(r['Amount']) || 0;
+          const desc = r['Description'].trim();
+          const isCredit = raw < 0 || isStatementCredit(desc);
+          return {
+            date: normalizeDate(r['Date']),
+            description: desc,
+            amount: Math.abs(raw),
+            type: isCredit ? 'credit' : 'expense',
+            suggested_category: mapAmexCategory(desc),
+          };
+        })
         .filter(r => r.amount > 0),
     };
   }
@@ -316,6 +332,16 @@ function normalizeDate(raw) {
   return raw;
 }
 
+// ─── Credit/refund detection ─────────────────────────────────────────────────
+// Detects statement credits, benefit credits, refunds, and returns by description keyword.
+// Covers Amex Platinum perks (airline fee, hotel credit, digital entertainment, Walmart+,
+// Uber Cash, Saks credit, etc.) and generic merchant refunds.
+function isStatementCredit(desc) {
+  if (!desc) return false;
+  return /\b(credit|refund|return|reversal|adjustment|cashback|cash back|reward|rebate|reimbursement)\b/i.test(desc)
+    || /statement credit|platinum credit|benefit credit|travel credit|airline fee|hotel credit|dining credit|entertainment credit|digital credit|walmart\+|uber cash|saks/i.test(desc);
+}
+
 // ─── Category mapping ───────────────────────────────────────────────────────
 
 function mapChaseCategory(cat) {
@@ -498,6 +524,7 @@ router.post('/confirm', (req, res) => {
 
     for (const t of txns) {
       if (!t.amount || !t.date) continue;
+      if (t.type === 'credit') continue; // refunds/statement credits — skip
 
       if (t.type === 'income') {
         insertIncome.run(t.amount, bank, t.date, t.description || '');

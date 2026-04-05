@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText, Check, X, AlertCircle, Download, Sparkles, Building2, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
+import { Upload, FileText, Check, X, AlertCircle, Download, Sparkles, Building2, ArrowUpCircle, ArrowDownCircle, RotateCcw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 
@@ -73,7 +73,8 @@ export default function Import() {
         type: t.type || 'expense',
       }));
       setTransactions(txns);
-      setSelected(new Set(txns.map((_, i) => i)));
+      // Deselect credits/refunds by default — user must explicitly include them
+      setSelected(new Set(txns.filter(t => t.type !== 'credit').map(t => t._id)));
       setSource(res.data.source);
       setBank(res.data.bank || '');
       setStep('preview');
@@ -107,8 +108,9 @@ export default function Import() {
   };
 
   const toggleType = idx => {
-    setTransactions(txns => txns.map((t, i) =>
-      i === idx ? { ...t, type: t.type === 'income' ? 'expense' : 'income' } : t
+    const cycle = { expense: 'credit', credit: 'income', income: 'expense' };
+    setTransactions(txns => txns.map(t =>
+      t._id === idx ? { ...t, type: cycle[t.type] || 'expense' } : t
     ));
   };
 
@@ -136,10 +138,11 @@ export default function Import() {
     ? transactions
     : transactions.filter(t => t.type === filterType);
 
-  const totalExpenses = transactions.filter((t, i) => selected.has(i) && t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  const totalIncome = transactions.filter((t, i) => selected.has(i) && t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const totalExpenses = transactions.filter(t => selected.has(t._id) && t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+  const totalIncome = transactions.filter(t => selected.has(t._id) && t.type === 'income').reduce((s, t) => s + t.amount, 0);
   const expenseCount = transactions.filter(t => t.type === 'expense').length;
   const incomeCount = transactions.filter(t => t.type === 'income').length;
+  const creditCount = transactions.filter(t => t.type === 'credit').length;
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -278,19 +281,30 @@ export default function Import() {
                 <span className="text-green-700 dark:text-green-400 font-medium">{incomeCount} income · ${totalIncome.toFixed(2)}</span>
               </div>
             )}
+            {creditCount > 0 && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-purple-50 dark:bg-purple-900/20 rounded-xl text-sm">
+                <RotateCcw className="w-4 h-4 text-purple-500" />
+                <span className="text-purple-700 dark:text-purple-400 font-medium">{creditCount} credits/refunds · excluded</span>
+              </div>
+            )}
           </div>
 
           {/* Filter + actions */}
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              {['all', 'expense', 'income'].map(f => (
-                <button key={f} onClick={() => setFilterType(f)}
+            <div className="flex items-center gap-2 flex-wrap">
+              {[
+                { key: 'all', label: `All (${transactions.length})` },
+                { key: 'expense', label: `Expenses (${expenseCount})` },
+                { key: 'income', label: `Income (${incomeCount})` },
+                { key: 'credit', label: `Credits (${creditCount})` },
+              ].map(f => (
+                <button key={f.key} onClick={() => setFilterType(f.key)}
                   className={`text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${
-                    filterType === f
+                    filterType === f.key
                       ? 'bg-blue-600 text-white'
                       : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
                   }`}>
-                  {f === 'all' ? `All (${transactions.length})` : f === 'expense' ? `Expenses (${expenseCount})` : `Income (${incomeCount})`}
+                  {f.label}
                 </button>
               ))}
             </div>
@@ -337,13 +351,16 @@ export default function Import() {
                       </td>
                       <td className="px-4 py-2.5">
                         <button onClick={() => toggleType(t._id)}
+                          title="Click to change type"
                           className={`text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1 ${
                             t.type === 'income'
                               ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                              : t.type === 'credit'
+                              ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
                               : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                           }`}>
-                          {t.type === 'income' ? <ArrowUpCircle className="w-3 h-3" /> : <ArrowDownCircle className="w-3 h-3" />}
-                          {t.type === 'income' ? 'Income' : 'Expense'}
+                          {t.type === 'income' ? <ArrowUpCircle className="w-3 h-3" /> : t.type === 'credit' ? <RotateCcw className="w-3 h-3" /> : <ArrowDownCircle className="w-3 h-3" />}
+                          {t.type === 'income' ? 'Income' : t.type === 'credit' ? 'Credit' : 'Expense'}
                         </button>
                       </td>
                       <td className="px-4 py-2.5">
@@ -356,8 +373,8 @@ export default function Import() {
                           {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </td>
-                      <td className={`px-4 py-2.5 text-right font-semibold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                        {t.type === 'income' ? '+' : '-'}${t.amount.toFixed(2)}
+                      <td className={`px-4 py-2.5 text-right font-semibold ${t.type === 'income' ? 'text-green-600' : t.type === 'credit' ? 'text-purple-500 line-through' : 'text-red-600'}`}>
+                        {t.type === 'income' ? '+' : t.type === 'credit' ? '±' : '-'}${t.amount.toFixed(2)}
                       </td>
                     </tr>
                   ))}
