@@ -549,7 +549,7 @@ router.post('/confirm', (req, res) => {
     'INSERT INTO expenses (amount, category, date, description, payment_method) VALUES (?, ?, ?, ?, ?)'
   );
   const insertIncome = db.prepare(
-    'INSERT INTO income (amount, source, date, description, is_recurring) VALUES (?, ?, ?, ?, 0)'
+    'INSERT INTO income (amount, source, date, notes, is_recurring) VALUES (?, ?, ?, ?, 0)'
   );
 
   const importMany = db.transaction((txns) => {
