@@ -22,6 +22,7 @@ app.use('/api/reports', require('./routes/reports'));
 app.use('/api/investments', require('./routes/investments'));
 app.use('/api/debts', require('./routes/debts'));
 app.use('/api/import', require('./routes/import'));
+app.use('/api/plaid', require('./routes/plaid'));
 
 // Serve frontend in production
 if (process.env.NODE_ENV === 'production') {

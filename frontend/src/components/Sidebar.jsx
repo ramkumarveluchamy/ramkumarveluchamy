@@ -5,7 +5,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   LayoutDashboard, TrendingUp, CreditCard, Receipt, Home, GraduationCap,
   PieChart, BarChart3, LogOut, Moon, Sun, DollarSign, TrendingDown,
-  Upload, Wallet, Wrench
+  Upload, Wallet, Wrench, Link2
 } from 'lucide-react';
 
 const navGroups = [
@@ -37,6 +37,7 @@ const navGroups = [
       { to: '/budget', icon: PieChart, label: 'Budget Planner' },
       { to: '/reports', icon: BarChart3, label: 'Reports' },
       { to: '/import', icon: Upload, label: 'Import Statement' },
+      { to: '/plaid', icon: Link2, label: 'Connected Accounts' },
     ],
   },
 ];

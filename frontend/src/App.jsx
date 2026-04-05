@@ -16,6 +16,7 @@ import Investments from './pages/Investments';
 import Debts from './pages/Debts';
 import Import from './pages/Import';
 import HomeMaintenance from './pages/HomeMaintenance';
+import PlaidConnect from './pages/PlaidConnect';
 
 function ProtectedRoute({ children }) {
   const { token, loading } = useAuth();
@@ -57,6 +58,7 @@ function AppRoutes() {
         <Route path="investments" element={<Investments />} />
         <Route path="debts" element={<Debts />} />
         <Route path="import" element={<Import />} />
+        <Route path="plaid" element={<PlaidConnect />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

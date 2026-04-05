@@ -202,6 +202,36 @@ function initializeDatabase() {
       notes TEXT,
       FOREIGN KEY (debt_id) REFERENCES debts(id) ON DELETE CASCADE
     );
+
+    -- Plaid connected bank accounts
+    CREATE TABLE IF NOT EXISTS plaid_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      access_token TEXT NOT NULL,
+      item_id TEXT NOT NULL UNIQUE,
+      institution_id TEXT,
+      institution_name TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS plaid_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id TEXT NOT NULL,
+      account_id TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      official_name TEXT,
+      type TEXT,
+      subtype TEXT,
+      mask TEXT,
+      FOREIGN KEY (item_id) REFERENCES plaid_items(item_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS plaid_sync_cursor (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id TEXT NOT NULL UNIQUE,
+      cursor TEXT,
+      last_synced TEXT,
+      FOREIGN KEY (item_id) REFERENCES plaid_items(item_id) ON DELETE CASCADE
+    );
   `);
 
   // Migrate home_maintenance to add new columns if upgrading from prior version
