@@ -336,17 +336,21 @@ router.get('/accounts', (req, res) => {
 
 router.get('/balances', (req, res) => {
   const items = db.prepare(
-    "SELECT item_id, institution_name, status FROM plaid_items WHERE status = 'active' ORDER BY created_at DESC"
+    'SELECT item_id, institution_name, status, error_message FROM plaid_items ORDER BY created_at DESC'
   ).all();
   const getAccounts = db.prepare(`
     SELECT account_id, name, type, subtype, mask,
            balance_available, balance_current, balance_limit, balance_last_updated
     FROM plaid_accounts WHERE item_id = ?
   `);
+  const getCursor = db.prepare('SELECT last_synced FROM plaid_sync_cursor WHERE item_id = ?');
 
   const result = items.map(item => ({
     item_id: item.item_id,
     institution_name: item.institution_name,
+    status: item.status || 'active',
+    error_message: item.error_message,
+    last_synced: getCursor.get(item.item_id)?.last_synced || null,
     accounts: getAccounts.all(item.item_id),
   }));
 

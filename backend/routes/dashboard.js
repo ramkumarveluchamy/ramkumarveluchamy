@@ -18,7 +18,7 @@ router.get('/summary', (req, res) => {
   ).get(`${prefix}%`);
 
   const totalExpenses = db.prepare(
-    `SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date LIKE ?`
+    `SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date LIKE ? AND (is_transfer IS NULL OR is_transfer = 0)`
   ).get(`${prefix}%`);
 
   const totalGroceries = db.prepare(
@@ -26,7 +26,7 @@ router.get('/summary', (req, res) => {
   ).get(`${prefix}%`);
 
   const expensesByCategory = db.prepare(
-    `SELECT category, SUM(amount) as total FROM expenses WHERE date LIKE ? GROUP BY category`
+    `SELECT category, SUM(amount) as total FROM expenses WHERE date LIKE ? AND (is_transfer IS NULL OR is_transfer = 0) GROUP BY category`
   ).all(`${prefix}%`);
 
   // Add groceries as a category
@@ -93,7 +93,10 @@ router.get('/recent-transactions', (req, res) => {
   ).all(limit);
 
   const expenses = db.prepare(
-    `SELECT id, amount, COALESCE(description, category) as description, date, 'expense' as type FROM expenses ORDER BY date DESC LIMIT ?`
+    `SELECT id, amount, COALESCE(merchant_name, description, category) as description, date, 'expense' as type
+     FROM expenses
+     WHERE (is_transfer IS NULL OR is_transfer = 0)
+     ORDER BY date DESC LIMIT ?`
   ).all(limit);
 
   const combined = [...income, ...expenses]

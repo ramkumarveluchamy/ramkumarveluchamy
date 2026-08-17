@@ -1,17 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { TrendingUp, TrendingDown, DollarSign, AlertCircle, CheckCircle, Plus, ChevronRight } from 'lucide-react';
+import {
+  TrendingUp, TrendingDown, DollarSign, AlertCircle, CheckCircle,
+  Plus, ChevronRight, Landmark, CreditCard, RefreshCw, AlertTriangle, Wallet,
+} from 'lucide-react';
 import api from '../api/client';
-import { format, subMonths, addMonths } from 'date-fns';
+import { format, subMonths, addMonths, formatDistanceToNow } from 'date-fns';
 
 const COLORS = ['#2563eb','#16a34a','#dc2626','#d97706','#7c3aed','#0891b2','#db2777','#65a30d'];
 
 const CATEGORY_COLORS = {
   Food: '#f97316', Transport: '#3b82f6', Shopping: '#8b5cf6',
   Entertainment: '#ec4899', Health: '#10b981', Miscellaneous: '#6b7280',
-  Groceries: '#84cc16', Education: '#f59e0b',
+  Groceries: '#84cc16', Education: '#f59e0b', Utilities: '#0891b2',
 };
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function fmt(n) {
+  return (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function relativeTime(dateStr) {
+  if (!dateStr) return null;
+  try {
+    const d = new Date(dateStr.replace(' ', 'T') + 'Z');
+    return formatDistanceToNow(d, { addSuffix: true });
+  } catch {
+    return null;
+  }
+}
+
+// ─── Components ──────────────────────────────────────────────────────────────
 
 function MonthPicker({ value, onChange }) {
   return (
@@ -35,18 +56,193 @@ function StatCard({ title, amount, icon: Icon, color, subtitle }) {
         </div>
       </div>
       <div className={`text-2xl font-bold ${amount < 0 ? 'text-red-600' : 'text-gray-900 dark:text-white'}`}>
-        {amount < 0 ? '-' : ''}${Math.abs(amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        {amount < 0 ? '-' : ''}${fmt(Math.abs(amount || 0))}
       </div>
       {subtitle && <div className="text-xs text-gray-400 mt-1">{subtitle}</div>}
     </div>
   );
 }
 
+function AccountCard({ account }) {
+  const isCredit = account.type === 'credit';
+  const isInvestment = account.type === 'investment';
+  const balance = account.balance_current ?? 0;
+  const limit = account.balance_limit;
+  const utilization = isCredit && limit ? (balance / limit * 100) : null;
+
+  const iconClass = isCredit
+    ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-600'
+    : isInvestment
+      ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600'
+      : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600';
+
+  const Icon = isCredit ? CreditCard : isInvestment ? Wallet : Landmark;
+
+  return (
+    <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
+      <div className="flex items-start gap-2 mb-2">
+        <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 ${iconClass}`}>
+          <Icon className="w-3.5 h-3.5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate leading-tight">{account.name}</div>
+          <div className="text-xs text-gray-400 truncate">{account.institution_name}{account.mask ? ` ••${account.mask}` : ''}</div>
+        </div>
+      </div>
+      <div className={`text-base font-bold ${
+        isCredit ? 'text-orange-600 dark:text-orange-400' : 'text-gray-900 dark:text-white'
+      }`}>
+        ${fmt(balance)}
+      </div>
+      {isCredit && limit && (
+        <div className="mt-1.5">
+          <div className="h-1 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all ${
+                utilization > 80 ? 'bg-red-500' : utilization > 50 ? 'bg-yellow-400' : 'bg-emerald-500'
+              }`}
+              style={{ width: `${Math.min(utilization, 100)}%` }}
+            />
+          </div>
+          <div className="text-xs text-gray-400 mt-0.5">{utilization?.toFixed(0)}% of ${(limit).toLocaleString('en-US', { maximumFractionDigits: 0 })}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AccountBalancesSection({ balances }) {
+  if (!balances) return null;
+
+  const allItems = balances;
+  const reauthItems = allItems.filter(item => item.status === 'reauth_required');
+  const activeItems = allItems.filter(item => item.status !== 'reauth_required');
+
+  const allAccounts = activeItems.flatMap(inst =>
+    inst.accounts.map(a => ({ ...a, institution_name: inst.institution_name }))
+  );
+
+  const lastSynced = allItems
+    .map(i => i.last_synced)
+    .filter(Boolean)
+    .sort()
+    .pop();
+
+  const depositTotal = allAccounts
+    .filter(a => a.type === 'depository')
+    .reduce((s, a) => s + (a.balance_current || 0), 0);
+  const creditTotal = allAccounts
+    .filter(a => a.type === 'credit')
+    .reduce((s, a) => s + (a.balance_current || 0), 0);
+  const investmentTotal = allAccounts
+    .filter(a => a.type === 'investment')
+    .reduce((s, a) => s + (a.balance_current || 0), 0);
+
+  if (allItems.length === 0) {
+    return (
+      <div className="card border border-dashed border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-800/50">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Connect Your Banks</div>
+            <div className="text-xs text-gray-400 mt-0.5">Link accounts via Plaid for live balances and automatic transaction sync</div>
+          </div>
+          <Link to="/plaid" className="btn-primary text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors">
+            Connect
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <h2 className="section-title mb-0">Live Balances</h2>
+          {lastSynced && (
+            <span className="flex items-center gap-1 text-xs text-gray-400">
+              <RefreshCw className="w-3 h-3" />
+              {relativeTime(lastSynced)}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {reauthItems.length > 0 && (
+            <Link to="/plaid" className="flex items-center gap-1 text-xs text-red-600 dark:text-red-400 font-medium">
+              <AlertTriangle className="w-3 h-3" />
+              {reauthItems.length} bank{reauthItems.length > 1 ? 's' : ''} need reconnection
+            </Link>
+          )}
+          <Link to="/plaid" className="text-xs text-blue-600 flex items-center gap-1">
+            Manage <ChevronRight className="w-3 h-3" />
+          </Link>
+        </div>
+      </div>
+
+      {allAccounts.length > 0 ? (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+            {allAccounts.map(acct => (
+              <AccountCard key={acct.account_id} account={acct} />
+            ))}
+          </div>
+
+          <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 flex flex-wrap gap-4 text-sm">
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Cash & Savings</span>
+              <span className="ml-2 font-semibold text-emerald-600">${fmt(depositTotal)}</span>
+            </div>
+            {creditTotal > 0 && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400">Credit Owed</span>
+                <span className="ml-2 font-semibold text-orange-600">${fmt(creditTotal)}</span>
+              </div>
+            )}
+            {investmentTotal > 0 && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400">Investments</span>
+                <span className="ml-2 font-semibold text-purple-600">${fmt(investmentTotal)}</span>
+              </div>
+            )}
+            <div className="ml-auto">
+              <span className="text-gray-500 dark:text-gray-400">Net Position</span>
+              <span className={`ml-2 font-semibold ${depositTotal + investmentTotal - creditTotal >= 0 ? 'text-gray-900 dark:text-white' : 'text-red-600'}`}>
+                ${fmt(depositTotal + investmentTotal - creditTotal)}
+              </span>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="text-sm text-gray-400 text-center py-4">
+          Sync your accounts to see live balances
+        </div>
+      )}
+
+      {reauthItems.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-red-100 dark:border-red-900/30">
+          {reauthItems.map(item => (
+            <div key={item.item_id} className="flex items-center justify-between text-xs text-red-600 dark:text-red-400">
+              <span className="flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                {item.institution_name} session expired — transactions not updating
+              </span>
+              <Link to="/plaid" className="font-medium underline underline-offset-2">Fix</Link>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Dashboard ───────────────────────────────────────────────────────────
+
 export default function Dashboard() {
   const [date, setDate] = useState(new Date());
   const [summary, setSummary] = useState(null);
   const [upcomingBills, setUpcomingBills] = useState([]);
   const [recent, setRecent] = useState([]);
+  const [balances, setBalances] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const month = date.getMonth() + 1;
@@ -58,10 +254,12 @@ export default function Dashboard() {
       api.get(`/dashboard/summary?month=${month}&year=${year}`),
       api.get('/dashboard/upcoming-bills'),
       api.get('/dashboard/recent-transactions?limit=8'),
-    ]).then(([s, b, r]) => {
+      api.get('/plaid/balances').catch(() => ({ data: [] })),
+    ]).then(([s, b, r, bal]) => {
       setSummary(s.data);
       setUpcomingBills(b.data);
       setRecent(r.data);
+      setBalances(bal.data);
     }).finally(() => setLoading(false));
   }, [month, year]);
 
@@ -91,7 +289,10 @@ export default function Dashboard() {
         <MonthPicker value={date} onChange={setDate} />
       </div>
 
-      {/* Stats */}
+      {/* Live account balances */}
+      <AccountBalancesSection balances={balances} />
+
+      {/* Monthly stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard title="Income" amount={summary?.income} icon={TrendingUp}
           color="bg-green-100 dark:bg-green-900/30 text-green-600" />
@@ -116,7 +317,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
-        {/* Expense breakdown chart */}
+        {/* Spending breakdown chart */}
         <div className="card">
           <h2 className="section-title">Spending Breakdown</h2>
           {pieData.length > 0 ? (
