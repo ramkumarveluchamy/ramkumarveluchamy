@@ -234,7 +234,7 @@ function initializeDatabase() {
     );
   `);
 
-  // Migrate home_maintenance to add new columns if upgrading from prior version
+  // Migrate home_maintenance columns
   const hmCols = db.prepare('PRAGMA table_info(home_maintenance)').all().map(c => c.name);
   if (!hmCols.includes('category')) {
     db.exec("ALTER TABLE home_maintenance ADD COLUMN category TEXT DEFAULT 'General'");
@@ -242,6 +242,87 @@ function initializeDatabase() {
   if (!hmCols.includes('urgency')) {
     db.exec("ALTER TABLE home_maintenance ADD COLUMN urgency TEXT DEFAULT 'routine'");
   }
+
+  // Migrate expenses — add Plaid deduplication and source tracking columns
+  const expenseCols = db.prepare('PRAGMA table_info(expenses)').all().map(c => c.name);
+  if (!expenseCols.includes('plaid_transaction_id')) {
+    db.exec("ALTER TABLE expenses ADD COLUMN plaid_transaction_id TEXT");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_plaid_txn ON expenses(plaid_transaction_id) WHERE plaid_transaction_id IS NOT NULL");
+  }
+  if (!expenseCols.includes('source')) {
+    db.exec("ALTER TABLE expenses ADD COLUMN source TEXT DEFAULT 'manual'");
+  }
+  if (!expenseCols.includes('is_transfer')) {
+    db.exec("ALTER TABLE expenses ADD COLUMN is_transfer INTEGER DEFAULT 0");
+  }
+  if (!expenseCols.includes('merchant_name')) {
+    db.exec("ALTER TABLE expenses ADD COLUMN merchant_name TEXT");
+  }
+  if (!expenseCols.includes('user_category_override')) {
+    db.exec("ALTER TABLE expenses ADD COLUMN user_category_override INTEGER DEFAULT 0");
+  }
+  if (!expenseCols.includes('original_plaid_category')) {
+    db.exec("ALTER TABLE expenses ADD COLUMN original_plaid_category TEXT");
+  }
+
+  // Migrate income — same deduplication columns
+  const incomeCols = db.prepare('PRAGMA table_info(income)').all().map(c => c.name);
+  if (!incomeCols.includes('plaid_transaction_id')) {
+    db.exec("ALTER TABLE income ADD COLUMN plaid_transaction_id TEXT");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_income_plaid_txn ON income(plaid_transaction_id) WHERE plaid_transaction_id IS NOT NULL");
+  }
+  if (!incomeCols.includes('source')) {
+    db.exec("ALTER TABLE income ADD COLUMN source TEXT DEFAULT 'manual'");
+  }
+  if (!incomeCols.includes('user_category_override')) {
+    db.exec("ALTER TABLE income ADD COLUMN user_category_override INTEGER DEFAULT 0");
+  }
+  if (!incomeCols.includes('original_plaid_category')) {
+    db.exec("ALTER TABLE income ADD COLUMN original_plaid_category TEXT");
+  }
+
+  // Migrate plaid_items — add connection status tracking
+  const plaidItemCols = db.prepare('PRAGMA table_info(plaid_items)').all().map(c => c.name);
+  if (!plaidItemCols.includes('status')) {
+    db.exec("ALTER TABLE plaid_items ADD COLUMN status TEXT DEFAULT 'active'");
+  }
+  if (!plaidItemCols.includes('error_code')) {
+    db.exec("ALTER TABLE plaid_items ADD COLUMN error_code TEXT");
+  }
+  if (!plaidItemCols.includes('error_message')) {
+    db.exec("ALTER TABLE plaid_items ADD COLUMN error_message TEXT");
+  }
+
+  // Migrate plaid_accounts — add live balance columns
+  const plaidAcctCols = db.prepare('PRAGMA table_info(plaid_accounts)').all().map(c => c.name);
+  if (!plaidAcctCols.includes('balance_available')) {
+    db.exec("ALTER TABLE plaid_accounts ADD COLUMN balance_available REAL");
+  }
+  if (!plaidAcctCols.includes('balance_current')) {
+    db.exec("ALTER TABLE plaid_accounts ADD COLUMN balance_current REAL");
+  }
+  if (!plaidAcctCols.includes('balance_limit')) {
+    db.exec("ALTER TABLE plaid_accounts ADD COLUMN balance_limit REAL");
+  }
+  if (!plaidAcctCols.includes('balance_last_updated')) {
+    db.exec("ALTER TABLE plaid_accounts ADD COLUMN balance_last_updated TEXT");
+  }
+
+  // Sync history log
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plaid_sync_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id TEXT NOT NULL,
+      synced_at TEXT DEFAULT (datetime('now')),
+      trigger TEXT DEFAULT 'manual',
+      transactions_added INTEGER DEFAULT 0,
+      transactions_modified INTEGER DEFAULT 0,
+      transactions_removed INTEGER DEFAULT 0,
+      errors TEXT,
+      duration_ms INTEGER,
+      FOREIGN KEY (item_id) REFERENCES plaid_items(item_id) ON DELETE CASCADE
+    )
+  `);
 }
 
 initializeDatabase();

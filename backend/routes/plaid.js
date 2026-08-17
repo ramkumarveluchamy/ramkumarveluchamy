@@ -25,31 +25,232 @@ function getPlaidClient() {
   return new PlaidApi(configuration);
 }
 
-// ─── Category mapping ────────────────────────────────────────────────────────
+// ─── Transaction classification ──────────────────────────────────────────────
 
-function mapPlaidCategory(primary) {
-  if (!primary) return 'Miscellaneous';
-  const map = {
-    FOOD_AND_DRINK: 'Food',
-    GROCERIES: 'Groceries',
-    TRAVEL: 'Transport',
-    TRANSPORTATION: 'Transport',
-    SHOPPING: 'Shopping',
-    ENTERTAINMENT: 'Entertainment',
-    MEDICAL: 'Health',
-    HEALTHCARE: 'Health',
-    UTILITIES: 'Utilities',
-    EDUCATION: 'Education',
-    INCOME: 'Income',
-    TRANSFER_IN: 'Income',
-    RENT_AND_UTILITIES: 'Utilities',
-    HOME_IMPROVEMENT: 'Miscellaneous',
-    PERSONAL_CARE: 'Health',
-    GENERAL_MERCHANDISE: 'Shopping',
-    GENERAL_SERVICES: 'Miscellaneous',
-    GOVERNMENT_AND_NON_PROFIT: 'Miscellaneous',
-  };
-  return map[primary.toUpperCase().replace(/ /g, '_')] || 'Miscellaneous';
+function classifyTransaction(t) {
+  const primary = (t.personal_finance_category?.primary || '').toUpperCase();
+  const detailed = (t.personal_finance_category?.detailed || '').toUpperCase();
+  const name = (t.merchant_name || t.name || '').toUpperCase();
+
+  // Internal money movements — store in expenses with is_transfer=1 so they are
+  // preserved for history but excluded from spending totals
+  if (primary === 'TRANSFER_OUT' || primary === 'TRANSFER_IN') {
+    return { module: 'expense', isTransfer: true, category: 'Transfer' };
+  }
+  // Credit card payments, student loan payments, etc.
+  if (primary === 'LOAN_PAYMENTS') {
+    return { module: 'expense', isTransfer: true, category: 'Transfer' };
+  }
+
+  // Plaid: negative amount = money entering the account (income/credit)
+  if (t.amount < 0) {
+    return { module: 'income', isTransfer: false, category: mapIncomeCategory(detailed) };
+  }
+
+  // Positive amount = money leaving the account (expense)
+  return { module: 'expense', isTransfer: false, category: mapExpenseCategory(primary, detailed, name) };
+}
+
+function mapIncomeCategory(detailed) {
+  if (detailed.includes('WAGES') || detailed.includes('SALARY')) return 'Wages';
+  if (detailed.includes('DIVIDEND')) return 'Dividends';
+  if (detailed.includes('INTEREST')) return 'Interest';
+  if (detailed.includes('TAX_REFUND') || detailed.includes('TAX REFUND')) return 'Tax Refund';
+  return 'Income';
+}
+
+function mapExpenseCategory(primary, detailed, name) {
+  switch (primary) {
+    case 'FOOD_AND_DRINK':
+      if (detailed.includes('GROCERY') || detailed.includes('SUPERMARKET')) return 'Groceries';
+      return 'Food';
+    case 'GENERAL_MERCHANDISE':
+      if (
+        detailed.includes('SUPERSTORE') ||
+        name.includes('WALMART') || name.includes('COSTCO') || name.includes('TARGET')
+      ) return 'Groceries';
+      return 'Shopping';
+    case 'GROCERIES': return 'Groceries';
+    case 'TRAVEL':
+    case 'TRANSPORTATION': return 'Transport';
+    case 'MEDICAL':
+    case 'HEALTHCARE':
+    case 'PERSONAL_CARE': return 'Health';
+    case 'ENTERTAINMENT': return 'Entertainment';
+    case 'EDUCATION': return 'Education';
+    case 'RENT_AND_UTILITIES':
+      return detailed.includes('RENT') ? 'Utilities' : 'Utilities';
+    case 'HOME_IMPROVEMENT': return 'Home Maintenance';
+    case 'SHOPPING': return 'Shopping';
+    case 'UTILITIES': return 'Utilities';
+    case 'BANK_FEES':
+    case 'GOVERNMENT_AND_NON_PROFIT':
+    case 'GENERAL_SERVICES':
+    default: return 'Miscellaneous';
+  }
+}
+
+// ─── Balance refresh ─────────────────────────────────────────────────────────
+
+async function refreshAccountBalances(client, item) {
+  try {
+    const resp = await client.accountsGet({ access_token: item.access_token });
+    const updateBalance = db.prepare(`
+      UPDATE plaid_accounts
+      SET balance_available = ?, balance_current = ?, balance_limit = ?,
+          balance_last_updated = datetime('now')
+      WHERE account_id = ?
+    `);
+    const updateMany = db.transaction((accounts) => {
+      for (const acct of accounts) {
+        updateBalance.run(
+          acct.balances.available,
+          acct.balances.current,
+          acct.balances.limit,
+          acct.account_id
+        );
+      }
+    });
+    updateMany(resp.data.accounts);
+  } catch (err) {
+    console.error(`[plaid] balance refresh failed for ${item.institution_name}:`, err.message);
+  }
+}
+
+// ─── Core sync function ──────────────────────────────────────────────────────
+
+async function syncItem(client, item, trigger) {
+  const startTime = Date.now();
+  let totalAdded = 0, totalModified = 0, totalRemoved = 0;
+  let syncError = null;
+
+  try {
+    const cursorRow = db.prepare('SELECT cursor FROM plaid_sync_cursor WHERE item_id = ?').get(item.item_id);
+    let cursor = cursorRow?.cursor || undefined;
+    let hasMore = true;
+
+    const insertExpense = db.prepare(`
+      INSERT OR IGNORE INTO expenses
+        (amount, category, date, description, merchant_name, payment_method,
+         source, plaid_transaction_id, is_transfer, original_plaid_category)
+      VALUES (?, ?, ?, ?, ?, ?, 'plaid', ?, ?, ?)
+    `);
+    const insertIncome = db.prepare(`
+      INSERT OR IGNORE INTO income
+        (amount, source, date, notes, is_recurring, plaid_transaction_id, original_plaid_category)
+      VALUES (?, ?, ?, ?, 0, ?, ?)
+    `);
+    // Preserve user's category choice (user_category_override=1) on modified events
+    const updateExpense = db.prepare(`
+      UPDATE expenses
+      SET amount = ?, date = ?, description = ?, merchant_name = ?,
+          category = CASE WHEN user_category_override = 1 THEN category ELSE ? END
+      WHERE plaid_transaction_id = ?
+    `);
+    const updateIncome = db.prepare(`
+      UPDATE income SET amount = ?, date = ?, notes = ?
+      WHERE plaid_transaction_id = ?
+    `);
+    const deleteByPlaidId = db.prepare(`
+      DELETE FROM expenses WHERE plaid_transaction_id = ?
+    `);
+    const deleteIncomeByPlaidId = db.prepare(`
+      DELETE FROM income WHERE plaid_transaction_id = ?
+    `);
+
+    while (hasMore) {
+      const response = await client.transactionsSync({
+        access_token: item.access_token,
+        cursor,
+      });
+      const { added, modified, removed, next_cursor, has_more } = response.data;
+
+      const processBatch = db.transaction(() => {
+        for (const t of added) {
+          if (t.pending) continue;
+          const amt = Math.abs(t.amount);
+          if (!amt) continue;
+
+          const { module, isTransfer, category } = classifyTransaction(t);
+          const desc = t.name || '';
+          const merchant = t.merchant_name || null;
+          const plaidPrimary = t.personal_finance_category?.primary || '';
+
+          if (module === 'income') {
+            insertIncome.run(amt, item.institution_name, t.date, desc, t.transaction_id, plaidPrimary);
+          } else {
+            insertExpense.run(amt, category, t.date, desc, merchant, item.institution_name, t.transaction_id, isTransfer ? 1 : 0, plaidPrimary);
+          }
+          totalAdded++;
+        }
+
+        for (const t of modified) {
+          if (t.pending) continue;
+          const amt = Math.abs(t.amount);
+          const { module, category } = classifyTransaction(t);
+          const desc = t.name || '';
+          const merchant = t.merchant_name || null;
+
+          if (module === 'income') {
+            updateIncome.run(amt, t.date, desc, t.transaction_id);
+          } else {
+            updateExpense.run(amt, t.date, desc, merchant, category, t.transaction_id);
+          }
+          totalModified++;
+        }
+
+        for (const t of removed) {
+          deleteByPlaidId.run(t.transaction_id);
+          deleteIncomeByPlaidId.run(t.transaction_id);
+          totalRemoved++;
+        }
+      });
+
+      processBatch();
+      cursor = next_cursor;
+      hasMore = has_more;
+    }
+
+    db.prepare(`
+      INSERT OR REPLACE INTO plaid_sync_cursor (item_id, cursor, last_synced)
+      VALUES (?, ?, datetime('now'))
+    `).run(item.item_id, cursor || '');
+
+    db.prepare(`
+      UPDATE plaid_items SET status = 'active', error_code = NULL, error_message = NULL
+      WHERE item_id = ?
+    `).run(item.item_id);
+
+    await refreshAccountBalances(client, item);
+
+    console.log(`[plaid sync] ${item.institution_name}: +${totalAdded} added, ~${totalModified} modified, -${totalRemoved} removed`);
+  } catch (err) {
+    const errorCode = err.response?.data?.error_code;
+    const errorMsg = err.response?.data?.error_message || err.message;
+
+    if (errorCode === 'ITEM_LOGIN_REQUIRED') {
+      db.prepare(`
+        UPDATE plaid_items SET status = 'reauth_required', error_code = ?, error_message = ?
+        WHERE item_id = ?
+      `).run(errorCode, errorMsg, item.item_id);
+      console.error(`[plaid sync] ${item.institution_name}: re-authentication required`);
+    } else {
+      db.prepare(`
+        UPDATE plaid_items SET status = 'error', error_code = ?, error_message = ?
+        WHERE item_id = ?
+      `).run(errorCode || 'UNKNOWN', errorMsg, item.item_id);
+      console.error(`[plaid sync] ${item.institution_name}:`, errorMsg);
+    }
+    syncError = errorMsg;
+  }
+
+  db.prepare(`
+    INSERT INTO plaid_sync_log
+      (item_id, trigger, transactions_added, transactions_modified, transactions_removed, errors, duration_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(item.item_id, trigger, totalAdded, totalModified, totalRemoved, syncError, Date.now() - startTime);
+
+  return { added: totalAdded, modified: totalModified, removed: totalRemoved, error: syncError };
 }
 
 // ─── POST /api/plaid/create-link-token ──────────────────────────────────────
@@ -61,8 +262,10 @@ router.post('/create-link-token', async (req, res) => {
       user: { client_user_id: 'financeme-user-1' },
       client_name: 'FinanceMe',
       products: [Products.Transactions],
+      additional_consented_products: [Products.Investments, Products.Liabilities],
       country_codes: [CountryCode.Us],
       language: 'en',
+      transactions: { days_requested: 730 },
     });
     res.json({ link_token: response.data.link_token });
   } catch (err) {
@@ -85,39 +288,26 @@ router.post('/exchange-token', async (req, res) => {
     const accountsResp = await client.accountsGet({ access_token });
     const accounts = accountsResp.data.accounts;
 
-    // Upsert item
     db.prepare(`
-      INSERT OR REPLACE INTO plaid_items (access_token, item_id, institution_id, institution_name)
-      VALUES (?, ?, ?, ?)
-    `).run(
-      access_token,
-      item_id,
-      institution?.institution_id || '',
-      institution?.name || 'Unknown Bank'
-    );
+      INSERT OR REPLACE INTO plaid_items (access_token, item_id, institution_id, institution_name, status)
+      VALUES (?, ?, ?, ?, 'active')
+    `).run(access_token, item_id, institution?.institution_id || '', institution?.name || 'Unknown Bank');
 
-    // Upsert accounts
     const insertAccount = db.prepare(`
-      INSERT OR REPLACE INTO plaid_accounts (item_id, account_id, name, official_name, type, subtype, mask)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO plaid_accounts
+        (item_id, account_id, name, official_name, type, subtype, mask,
+         balance_available, balance_current, balance_limit, balance_last_updated)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `);
     for (const acct of accounts) {
       insertAccount.run(
-        item_id,
-        acct.account_id,
-        acct.name,
-        acct.official_name || '',
-        acct.type,
-        acct.subtype || '',
-        acct.mask || ''
+        item_id, acct.account_id, acct.name, acct.official_name || '',
+        acct.type, acct.subtype || '', acct.mask || '',
+        acct.balances.available, acct.balances.current, acct.balances.limit
       );
     }
 
-    res.json({
-      success: true,
-      institution: institution?.name || 'Bank',
-      accounts: accounts.length,
-    });
+    res.json({ success: true, institution: institution?.name || 'Bank', accounts: accounts.length });
   } catch (err) {
     console.error('Plaid exchange error:', err.response?.data || err.message);
     res.status(500).json({ error: err.response?.data?.error_message || err.message });
@@ -127,7 +317,9 @@ router.post('/exchange-token', async (req, res) => {
 // ─── GET /api/plaid/accounts ─────────────────────────────────────────────────
 
 router.get('/accounts', (req, res) => {
-  const items = db.prepare('SELECT id, item_id, institution_id, institution_name, created_at FROM plaid_items ORDER BY created_at DESC').all();
+  const items = db.prepare(
+    'SELECT id, item_id, institution_id, institution_name, status, error_code, error_message, created_at FROM plaid_items ORDER BY created_at DESC'
+  ).all();
   const getAccounts = db.prepare('SELECT * FROM plaid_accounts WHERE item_id = ?');
   const getCursor = db.prepare('SELECT last_synced FROM plaid_sync_cursor WHERE item_id = ?');
 
@@ -135,6 +327,27 @@ router.get('/accounts', (req, res) => {
     ...item,
     accounts: getAccounts.all(item.item_id),
     last_synced: getCursor.get(item.item_id)?.last_synced || null,
+  }));
+
+  res.json(result);
+});
+
+// ─── GET /api/plaid/balances ─────────────────────────────────────────────────
+
+router.get('/balances', (req, res) => {
+  const items = db.prepare(
+    "SELECT item_id, institution_name, status FROM plaid_items WHERE status = 'active' ORDER BY created_at DESC"
+  ).all();
+  const getAccounts = db.prepare(`
+    SELECT account_id, name, type, subtype, mask,
+           balance_available, balance_current, balance_limit, balance_last_updated
+    FROM plaid_accounts WHERE item_id = ?
+  `);
+
+  const result = items.map(item => ({
+    item_id: item.item_id,
+    institution_name: item.institution_name,
+    accounts: getAccounts.all(item.item_id),
   }));
 
   res.json(result);
@@ -153,72 +366,43 @@ router.post('/sync', async (req, res) => {
     return res.status(404).json({ error: 'No connected accounts found. Connect a bank first.' });
   }
 
-  const insertExpense = db.prepare(
-    'INSERT INTO expenses (amount, category, date, description, payment_method) VALUES (?, ?, ?, ?, ?)'
-  );
-  const insertIncome = db.prepare(
-    'INSERT INTO income (amount, source, date, notes, is_recurring) VALUES (?, ?, ?, ?, 0)'
-  );
-
-  let totalAdded = 0;
-  const errors = [];
   const client = getPlaidClient();
+  const results = [];
 
   for (const item of items) {
     if (!item) continue;
-    try {
-      const cursorRow = db.prepare('SELECT cursor FROM plaid_sync_cursor WHERE item_id = ?').get(item.item_id);
-      let cursor = cursorRow?.cursor || undefined;
-      let hasMore = true;
-      let added = 0;
-
-      while (hasMore) {
-        const response = await client.transactionsSync({
-          access_token: item.access_token,
-          cursor,
-        });
-        const { added: newTxns, next_cursor, has_more } = response.data;
-
-        const insertMany = db.transaction((txns) => {
-          for (const t of txns) {
-            if (t.pending) continue;
-            const amt = Math.abs(t.amount);
-            if (!amt) continue;
-            const desc = t.merchant_name || t.name || '';
-            const date = t.date;
-            const category = mapPlaidCategory(t.personal_finance_category?.primary || t.category?.[0] || '');
-
-            // Plaid: positive amount = money leaving account (expense)
-            //        negative amount = money entering account (income/refund)
-            if (t.amount > 0) {
-              insertExpense.run(amt, category, date, desc, item.institution_name);
-            } else {
-              insertIncome.run(amt, item.institution_name, date, desc);
-            }
-            added++;
-          }
-        });
-
-        insertMany(newTxns);
-        cursor = next_cursor;
-        hasMore = has_more;
-      }
-
-      db.prepare(`
-        INSERT OR REPLACE INTO plaid_sync_cursor (item_id, cursor, last_synced)
-        VALUES (?, ?, datetime('now'))
-      `).run(item.item_id, cursor || '');
-
-      totalAdded += added;
-      console.log(`[plaid sync] ${item.institution_name}: +${added} transactions`);
-    } catch (err) {
-      const msg = err.response?.data?.error_message || err.message;
-      console.error(`[plaid sync] ${item.institution_name} error:`, msg);
-      errors.push(`${item.institution_name}: ${msg}`);
-    }
+    const result = await syncItem(client, item, 'manual');
+    results.push({ institution: item.institution_name, ...result });
   }
 
-  res.json({ added: totalAdded, errors });
+  const totalAdded = results.reduce((s, r) => s + r.added, 0);
+  const totalModified = results.reduce((s, r) => s + r.modified, 0);
+  const totalRemoved = results.reduce((s, r) => s + r.removed, 0);
+  const errors = results.filter(r => r.error).map(r => `${r.institution}: ${r.error}`);
+
+  res.json({ added: totalAdded, modified: totalModified, removed: totalRemoved, errors });
+});
+
+// ─── POST /api/plaid/reauth/:item_id ─────────────────────────────────────────
+
+router.post('/reauth/:item_id', async (req, res) => {
+  const item = db.prepare('SELECT * FROM plaid_items WHERE item_id = ?').get(req.params.item_id);
+  if (!item) return res.status(404).json({ error: 'Account not found' });
+
+  try {
+    const client = getPlaidClient();
+    const response = await client.linkTokenCreate({
+      user: { client_user_id: 'financeme-user-1' },
+      client_name: 'FinanceMe',
+      access_token: item.access_token,
+      country_codes: [CountryCode.Us],
+      language: 'en',
+    });
+    res.json({ link_token: response.data.link_token });
+  } catch (err) {
+    console.error('Plaid reauth error:', err.response?.data || err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── DELETE /api/plaid/accounts/:item_id ─────────────────────────────────────
