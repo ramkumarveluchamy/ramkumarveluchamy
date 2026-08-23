@@ -299,10 +299,8 @@ router.post('/create-link-token', async (req, res) => {
       user: { client_user_id: 'financeme-user-1' },
       client_name: 'FinanceMe',
       products: [Products.Transactions],
-      additional_consented_products: [Products.Investments, Products.Liabilities],
       country_codes: [CountryCode.Us],
       language: 'en',
-      transactions: { days_requested: 730 },
     });
     res.json({ link_token: response.data.link_token });
   } catch (err) {
