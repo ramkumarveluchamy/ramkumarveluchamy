@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { usePlaidLink } from 'react-plaid-link';
-import { Link2, RefreshCw, Trash2, Check, AlertCircle, Building2, CreditCard, Landmark, TrendingUp, Wallet } from 'lucide-react';
+import {
+  Link2, RefreshCw, Trash2, Check, AlertCircle, Building2,
+  CreditCard, Landmark, TrendingUp, Wallet, ShieldAlert, ShieldCheck,
+} from 'lucide-react';
 import api from '../api/client';
 
 const ACCOUNT_TYPE_ICON = {
@@ -17,6 +20,8 @@ const ACCOUNT_TYPE_COLOR = {
   loan: 'text-orange-600 bg-orange-50 dark:bg-orange-900/20',
 };
 
+// ─── Connect new bank ─────────────────────────────────────────────────────────
+
 function PlaidLinkButton({ onSuccess, disabled }) {
   const [linkToken, setLinkToken] = useState(null);
   const [tokenError, setTokenError] = useState('');
@@ -31,10 +36,7 @@ function PlaidLinkButton({ onSuccess, disabled }) {
     onSuccess(public_token, metadata.institution);
   }, [onSuccess]);
 
-  const { open, ready } = usePlaidLink({
-    token: linkToken,
-    onSuccess: onPlaidSuccess,
-  });
+  const { open, ready } = usePlaidLink({ token: linkToken, onSuccess: onPlaidSuccess });
 
   if (tokenError) {
     return (
@@ -57,10 +59,100 @@ function PlaidLinkButton({ onSuccess, disabled }) {
   );
 }
 
+// ─── Re-authenticate existing bank ───────────────────────────────────────────
+
+function ReauthButton({ itemId, institutionName, onSuccess }) {
+  const [linkToken, setLinkToken] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const fetchToken = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await api.post(`/plaid/reauth/${itemId}`);
+      setLinkToken(res.data.link_token);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to start re-authentication');
+      setLoading(false);
+    }
+  };
+
+  const onPlaidSuccess = useCallback(() => {
+    setLinkToken(null);
+    setLoading(false);
+    onSuccess(itemId);
+  }, [itemId, onSuccess]);
+
+  const onPlaidExit = useCallback(() => {
+    setLinkToken(null);
+    setLoading(false);
+  }, []);
+
+  const { open, ready } = usePlaidLink({
+    token: linkToken,
+    onSuccess: onPlaidSuccess,
+    onExit: onPlaidExit,
+  });
+
+  // Auto-open once token is ready
+  useEffect(() => {
+    if (ready && linkToken) {
+      open();
+    }
+  }, [ready, linkToken, open]);
+
+  if (error) {
+    return (
+      <span className="text-xs text-red-600">{error}</span>
+    );
+  }
+
+  return (
+    <button
+      onClick={fetchToken}
+      disabled={loading}
+      className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-60"
+    >
+      <ShieldAlert className="w-3.5 h-3.5" />
+      {loading ? 'Opening…' : 'Fix Connection'}
+    </button>
+  );
+}
+
+// ─── Status badge ─────────────────────────────────────────────────────────────
+
+function StatusBadge({ status }) {
+  if (status === 'reauth_required') {
+    return (
+      <span className="flex items-center gap-1 text-xs font-medium text-red-600 bg-red-100 dark:bg-red-900/30 px-2 py-0.5 rounded-full">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+        Needs re-login
+      </span>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <span className="flex items-center gap-1 text-xs font-medium text-orange-600 bg-orange-100 dark:bg-orange-900/30 px-2 py-0.5 rounded-full">
+        <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+        Error
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1 text-xs font-medium text-green-600 bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded-full">
+      <ShieldCheck className="w-3 h-3" />
+      Connected
+    </span>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export default function PlaidConnect() {
   const [institutions, setInstitutions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(null); // item_id being synced
+  const [syncing, setSyncing] = useState(null);
   const [syncResult, setSyncResult] = useState(null);
   const [error, setError] = useState('');
   const [connecting, setConnecting] = useState(false);
@@ -88,6 +180,22 @@ export default function PlaidConnect() {
       setError(err.response?.data?.error || 'Failed to connect account');
     } finally {
       setConnecting(false);
+    }
+  };
+
+  // Called after successful re-authentication — just sync to reset status
+  const handleReauthSuccess = async (item_id) => {
+    setSyncing(item_id);
+    setSyncResult(null);
+    setError('');
+    try {
+      const res = await api.post('/plaid/sync', { item_id });
+      setSyncResult({ item_id, added: res.data.added, errors: res.data.errors });
+      await loadAccounts();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Sync after re-auth failed');
+    } finally {
+      setSyncing(null);
     }
   };
 
@@ -131,6 +239,8 @@ export default function PlaidConnect() {
     }
   };
 
+  const reauthCount = institutions.filter(i => i.status === 'reauth_required').length;
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div className="flex items-start justify-between">
@@ -151,6 +261,21 @@ export default function PlaidConnect() {
           </button>
         )}
       </div>
+
+      {/* Re-auth summary alert */}
+      {reauthCount > 0 && (
+        <div className="flex items-start gap-3 p-4 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20">
+          <ShieldAlert className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+          <div className="text-sm">
+            <p className="font-semibold text-red-800 dark:text-red-300">
+              {reauthCount} bank connection{reauthCount !== 1 ? 's need' : ' needs'} re-authentication
+            </p>
+            <p className="text-red-700 dark:text-red-400 mt-0.5">
+              Your login credentials changed or the session expired. Click "Fix Connection" below to restore access.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Sync result banner */}
       {syncResult && (
@@ -200,73 +325,107 @@ export default function PlaidConnect() {
         </div>
       ) : (
         <div className="space-y-4">
-          {institutions.map(inst => (
-            <div key={inst.item_id} className="card space-y-4">
-              {/* Institution header */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
-                    <Building2 className="w-5 h-5 text-blue-600" />
+          {institutions.map(inst => {
+            const needsReauth = inst.status === 'reauth_required';
+            const hasError = inst.status === 'error';
+            return (
+              <div
+                key={inst.item_id}
+                className={`card space-y-4 ${needsReauth ? 'border-red-200 dark:border-red-800' : ''}`}
+              >
+                {/* Institution header */}
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                      needsReauth
+                        ? 'bg-red-100 dark:bg-red-900/30'
+                        : 'bg-blue-100 dark:bg-blue-900/30'
+                    }`}>
+                      <Building2 className={`w-5 h-5 ${needsReauth ? 'text-red-600' : 'text-blue-600'}`} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-gray-900 dark:text-white">{inst.institution_name}</p>
+                        <StatusBadge status={inst.status} />
+                      </div>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {inst.accounts.length} account{inst.accounts.length !== 1 ? 's' : ''} ·{' '}
+                        {inst.last_synced
+                          ? `Last synced ${new Date(inst.last_synced + 'Z').toLocaleDateString()}`
+                          : 'Never synced'}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-semibold text-gray-900 dark:text-white">{inst.institution_name}</p>
-                    <p className="text-xs text-gray-400">
-                      {inst.accounts.length} account{inst.accounts.length !== 1 ? 's' : ''} ·{' '}
-                      {inst.last_synced
-                        ? `Last synced ${new Date(inst.last_synced + 'Z').toLocaleDateString()}`
-                        : 'Never synced'}
-                    </p>
+                  <div className="flex items-center gap-2">
+                    {needsReauth ? (
+                      <ReauthButton
+                        itemId={inst.item_id}
+                        institutionName={inst.institution_name}
+                        onSuccess={handleReauthSuccess}
+                      />
+                    ) : (
+                      <button
+                        onClick={() => handleSync(inst.item_id)}
+                        disabled={syncing !== null}
+                        className="btn-secondary text-sm py-1.5 flex items-center gap-1.5"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${syncing === inst.item_id ? 'animate-spin' : ''}`} />
+                        {syncing === inst.item_id ? 'Syncing…' : 'Sync'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDisconnect(inst.item_id, inst.institution_name)}
+                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                      title="Disconnect"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleSync(inst.item_id)}
-                    disabled={syncing !== null}
-                    className="btn-secondary text-sm py-1.5 flex items-center gap-1.5"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${syncing === inst.item_id ? 'animate-spin' : ''}`} />
-                    {syncing === inst.item_id ? 'Syncing…' : 'Sync'}
-                  </button>
-                  <button
-                    onClick={() => handleDisconnect(inst.item_id, inst.institution_name)}
-                    className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                    title="Disconnect"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
 
-              {/* Account list */}
-              <div className="divide-y divide-gray-100 dark:divide-gray-700 -mx-5 px-5">
-                {inst.accounts.map(acct => {
-                  const Icon = ACCOUNT_TYPE_ICON[acct.type] || Wallet;
-                  const colorClass = ACCOUNT_TYPE_COLOR[acct.type] || 'text-gray-600 bg-gray-100';
-                  return (
-                    <div key={acct.account_id} className="py-2.5 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${colorClass}`}>
-                          <Icon className="w-3.5 h-3.5" />
+                {/* Reauth warning detail */}
+                {(needsReauth || hasError) && inst.error_message && (
+                  <div className={`flex items-start gap-2 px-3 py-2 rounded-lg text-xs ${
+                    needsReauth
+                      ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'
+                      : 'bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400'
+                  }`}>
+                    <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    {inst.error_message}
+                  </div>
+                )}
+
+                {/* Account list */}
+                <div className="divide-y divide-gray-100 dark:divide-gray-700 -mx-5 px-5">
+                  {inst.accounts.map(acct => {
+                    const Icon = ACCOUNT_TYPE_ICON[acct.type] || Wallet;
+                    const colorClass = ACCOUNT_TYPE_COLOR[acct.type] || 'text-gray-600 bg-gray-100';
+                    return (
+                      <div key={acct.account_id} className="py-2.5 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${colorClass}`}>
+                            <Icon className="w-3.5 h-3.5" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{acct.name}</p>
+                            {acct.official_name && acct.official_name !== acct.name && (
+                              <p className="text-xs text-gray-400">{acct.official_name}</p>
+                            )}
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{acct.name}</p>
-                          {acct.official_name && acct.official_name !== acct.name && (
-                            <p className="text-xs text-gray-400">{acct.official_name}</p>
+                        <div className="flex items-center gap-3 text-right">
+                          <span className="text-xs text-gray-400 capitalize">{acct.subtype || acct.type}</span>
+                          {acct.mask && (
+                            <span className="text-xs font-mono text-gray-500">••••{acct.mask}</span>
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 text-right">
-                        <span className="text-xs text-gray-400 capitalize">{acct.subtype || acct.type}</span>
-                        {acct.mask && (
-                          <span className="text-xs font-mono text-gray-500">••••{acct.mask}</span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
