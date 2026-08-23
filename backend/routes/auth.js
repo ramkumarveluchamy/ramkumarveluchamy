@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../database');
 const { JWT_SECRET } = require('../middleware/auth');
+const plaidRoutes = require('./plaid');
 
 // Check if user exists (first-time setup detection)
 router.get('/status', (req, res) => {
@@ -39,6 +40,11 @@ router.post('/login', (req, res) => {
   }
   const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token });
+
+  // Background sync — fire after response so login is never delayed
+  setImmediate(() => {
+    plaidRoutes.syncAllActiveItems('login').catch(() => {});
+  });
 });
 
 // Change PIN

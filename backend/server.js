@@ -22,7 +22,8 @@ app.use('/api/reports', require('./routes/reports'));
 app.use('/api/investments', require('./routes/investments'));
 app.use('/api/debts', require('./routes/debts'));
 app.use('/api/import', require('./routes/import'));
-app.use('/api/plaid', require('./routes/plaid'));
+const plaidRoutes = require('./routes/plaid');
+app.use('/api/plaid', plaidRoutes);
 
 // Serve frontend in production
 if (process.env.NODE_ENV === 'production') {
@@ -36,4 +37,13 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 app.listen(PORT, () => {
   console.log(`Finance API running on http://localhost:${PORT}`);
+
+  // Scheduled sync every 6 hours; first run after 2 minutes to let startup settle
+  const SIX_HOURS = 6 * 60 * 60 * 1000;
+  setTimeout(() => {
+    plaidRoutes.syncAllActiveItems('scheduled').catch(() => {});
+    setInterval(() => {
+      plaidRoutes.syncAllActiveItems('scheduled').catch(() => {});
+    }, SIX_HOURS);
+  }, 2 * 60 * 1000);
 });

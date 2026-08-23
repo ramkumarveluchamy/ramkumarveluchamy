@@ -4,8 +4,6 @@ const { Configuration, PlaidApi, PlaidEnvironments, Products, CountryCode } = re
 const db = require('../database');
 const { authenticate } = require('../middleware/auth');
 
-router.use(authenticate);
-
 // ─── Plaid client ────────────────────────────────────────────────────────────
 
 function getPlaidClient() {
@@ -253,6 +251,41 @@ async function syncItem(client, item, trigger) {
   return { added: totalAdded, modified: totalModified, removed: totalRemoved, error: syncError };
 }
 
+// ─── POST /api/plaid/webhook (no auth — called directly by Plaid) ────────────
+
+router.post('/webhook', async (req, res) => {
+  const { webhook_type, webhook_code, item_id, error } = req.body;
+  res.json({ received: true }); // Respond immediately; Plaid requires <10s
+
+  try {
+    if (webhook_type === 'TRANSACTIONS') {
+      if (webhook_code === 'SYNC_UPDATES_AVAILABLE' || webhook_code === 'DEFAULT_UPDATE') {
+        const item = db.prepare("SELECT * FROM plaid_items WHERE item_id = ? AND status != 'reauth_required'").get(item_id);
+        if (item) {
+          const client = getPlaidClient();
+          await syncItem(client, item, 'webhook').catch(err =>
+            console.error('[webhook sync]', item.institution_name, err.message)
+          );
+        }
+      }
+    } else if (webhook_type === 'ITEM') {
+      if (webhook_code === 'ERROR' && error?.error_code === 'ITEM_LOGIN_REQUIRED') {
+        db.prepare(`
+          UPDATE plaid_items SET status = 'reauth_required', error_code = ?, error_message = ?
+          WHERE item_id = ?
+        `).run(error.error_code, error.error_message || 'Login required', item_id);
+        console.log('[webhook] reauth required for item:', item_id);
+      }
+    }
+  } catch (err) {
+    console.error('[webhook]', err.message);
+  }
+});
+
+// ─── Auth middleware for all routes below ────────────────────────────────────
+
+router.use(authenticate);
+
 // ─── POST /api/plaid/create-link-token ──────────────────────────────────────
 
 router.post('/create-link-token', async (req, res) => {
@@ -425,4 +458,23 @@ router.delete('/accounts/:item_id', async (req, res) => {
   res.json({ success: true });
 });
 
+// ─── Exported helper for scheduled / login-triggered sync ────────────────────
+
+async function syncAllActiveItems(trigger = 'scheduled') {
+  const items = db.prepare("SELECT * FROM plaid_items WHERE status != 'reauth_required'").all();
+  if (!items.length) return;
+  try {
+    const client = getPlaidClient();
+    for (const item of items) {
+      await syncItem(client, item, trigger).catch(err =>
+        console.error(`[sync:${trigger}] ${item.institution_name}:`, err.message)
+      );
+    }
+    console.log(`[sync:${trigger}] completed for ${items.length} item(s)`);
+  } catch (err) {
+    console.error(`[sync:${trigger}] client error:`, err.message);
+  }
+}
+
 module.exports = router;
+module.exports.syncAllActiveItems = syncAllActiveItems;
