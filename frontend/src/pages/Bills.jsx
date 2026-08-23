@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Pencil, Trash2, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
+import { Plus, Pencil, Trash2, CheckCircle, XCircle, AlertTriangle, Zap } from 'lucide-react';
 import api from '../api/client';
 import Modal from '../components/Modal';
 import { format, subMonths, addMonths } from 'date-fns';
@@ -8,7 +8,7 @@ const CATEGORIES = ['Mortgage/Rent', 'Electric', 'Water', 'Gas', 'Internet', 'In
 
 function BillForm({ initial, onSave, onClose }) {
   const [form, setForm] = useState(initial || {
-    name: '', amount: '', due_day: '', category: 'Other', is_autopay: false,
+    name: '', amount: '', due_day: '', category: 'Other', is_autopay: false, merchant_pattern: '',
   });
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -44,6 +44,15 @@ function BillForm({ initial, onSave, onClose }) {
         <select className="input" value={form.category} onChange={e => set('category', e.target.value)}>
           {CATEGORIES.map(c => <option key={c}>{c}</option>)}
         </select>
+      </div>
+      <div>
+        <label className="label">Auto-match keyword <span className="text-gray-400 font-normal">(optional)</span></label>
+        <input type="text" className="input" value={form.merchant_pattern || ''}
+          onChange={e => set('merchant_pattern', e.target.value)}
+          placeholder="e.g. netflix, comcast, verizon" />
+        <p className="text-xs text-gray-400 mt-1">
+          When a Plaid transaction contains this keyword, the bill is marked paid automatically.
+        </p>
       </div>
       <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
         <input type="checkbox" id="autopay" checked={form.is_autopay}
@@ -98,13 +107,25 @@ export default function Bills() {
   const totalDue = bills.reduce((sum, b) => b.status !== 'paid' ? sum + b.amount : sum, 0);
   const totalPaid = bills.reduce((sum, b) => b.status === 'paid' ? sum + b.amount : sum, 0);
 
+  const handleAutoMatch = async () => {
+    try {
+      const res = await api.post('/bills/auto-match', { month, year });
+      if (res.data.matched > 0) load();
+    } catch {}
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="page-header">Recurring Bills</h1>
-        <button onClick={() => setModal('add')} className="btn-primary flex items-center gap-2">
-          <Plus className="w-4 h-4" /> Add Bill
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={handleAutoMatch} className="btn-secondary flex items-center gap-2 text-sm">
+            <Zap className="w-4 h-4" /> Auto-match
+          </button>
+          <button onClick={() => setModal('add')} className="btn-primary flex items-center gap-2">
+            <Plus className="w-4 h-4" /> Add Bill
+          </button>
+        </div>
       </div>
 
       {/* Month + summary */}
@@ -156,11 +177,16 @@ export default function Bills() {
                     {bill.status === 'paid' ? <CheckCircle className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
                   </button>
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className={`font-medium ${bill.status === 'paid' ? 'text-gray-400 line-through' : 'text-gray-900 dark:text-white'}`}>
                         {bill.name}
                       </span>
                       {bill.is_autopay && <span className="badge-blue text-xs">Auto-pay</span>}
+                      {bill.payment?.source === 'plaid' && (
+                        <span className="flex items-center gap-1 text-xs font-medium text-violet-600 bg-violet-100 dark:bg-violet-900/30 px-1.5 py-0.5 rounded-full">
+                          <Zap className="w-2.5 h-2.5" /> Auto-matched
+                        </span>
+                      )}
                       {isOverdue && <AlertTriangle className="w-4 h-4 text-red-500" />}
                       {isDueSoon && <AlertTriangle className="w-4 h-4 text-yellow-500" />}
                     </div>

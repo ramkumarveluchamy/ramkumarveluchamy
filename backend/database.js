@@ -308,6 +308,18 @@ function initializeDatabase() {
     db.exec("ALTER TABLE plaid_accounts ADD COLUMN balance_last_updated TEXT");
   }
 
+  // Migrate bills — add merchant pattern for auto-matching
+  const billCols = db.prepare('PRAGMA table_info(bills)').all().map(c => c.name);
+  if (!billCols.includes('merchant_pattern')) {
+    db.exec("ALTER TABLE bills ADD COLUMN merchant_pattern TEXT");
+  }
+
+  // Migrate bill_payments — track whether matched by Plaid or set manually
+  const bpCols = db.prepare('PRAGMA table_info(bill_payments)').all().map(c => c.name);
+  if (!bpCols.includes('source')) {
+    db.exec("ALTER TABLE bill_payments ADD COLUMN source TEXT DEFAULT 'manual'");
+  }
+
   // Sync history log
   db.exec(`
     CREATE TABLE IF NOT EXISTS plaid_sync_log (

@@ -221,6 +221,10 @@ async function syncItem(client, item, trigger) {
 
     await refreshAccountBalances(client, item);
 
+    // Auto-match bills for the current month after every sync
+    const now = new Date();
+    matchBillsForMonth(now.getFullYear(), now.getMonth() + 1);
+
     console.log(`[plaid sync] ${item.institution_name}: +${totalAdded} added, ~${totalModified} modified, -${totalRemoved} removed`);
   } catch (err) {
     const errorCode = err.response?.data?.error_code;
@@ -457,6 +461,53 @@ router.delete('/accounts/:item_id', async (req, res) => {
   db.prepare('DELETE FROM plaid_items WHERE item_id = ?').run(item_id);
   res.json({ success: true });
 });
+
+// ─── Bill auto-matching ───────────────────────────────────────────────────────
+
+function matchBillsForMonth(year, month) {
+  const bills = db.prepare("SELECT * FROM bills WHERE merchant_pattern IS NOT NULL AND merchant_pattern != ''").all();
+  if (!bills.length) return;
+
+  const prefix = `${year}-${String(month).padStart(2, '0')}`;
+  let matched = 0;
+
+  for (const bill of bills) {
+    const pattern = `%${bill.merchant_pattern.toLowerCase()}%`;
+
+    // Find any expense this month matching the pattern
+    const expense = db.prepare(`
+      SELECT id FROM expenses
+      WHERE (LOWER(merchant_name) LIKE ? OR LOWER(description) LIKE ?)
+        AND date LIKE ?
+        AND (is_transfer IS NULL OR is_transfer = 0)
+      LIMIT 1
+    `).get(pattern, pattern, `${prefix}%`);
+
+    if (!expense) continue;
+
+    // Don't overwrite a manual payment
+    const existing = db.prepare(
+      'SELECT id, source FROM bill_payments WHERE bill_id = ? AND month = ? AND year = ?'
+    ).get(bill.id, month, year);
+
+    if (existing) {
+      // Update only if it was auto-matched before (preserve manual overrides)
+      if (existing.source === 'plaid') {
+        db.prepare("UPDATE bill_payments SET status='paid' WHERE id=?").run(existing.id);
+      }
+    } else {
+      db.prepare(`
+        INSERT INTO bill_payments (bill_id, month, year, status, paid_on, source)
+        VALUES (?, ?, ?, 'paid', ?, 'plaid')
+      `).run(bill.id, month, year, `${prefix}-01`);
+      matched++;
+    }
+  }
+
+  if (matched > 0) {
+    console.log(`[bill match] auto-matched ${matched} bill(s) for ${prefix}`);
+  }
+}
 
 // ─── Exported helper for scheduled / login-triggered sync ────────────────────
 

@@ -22,21 +22,21 @@ router.get('/', (req, res) => {
 });
 
 router.post('/', (req, res) => {
-  const { name, amount, due_day, category, is_autopay } = req.body;
+  const { name, amount, due_day, category, is_autopay, merchant_pattern } = req.body;
   if (!name || !amount || !due_day || !category) {
     return res.status(400).json({ error: 'Name, amount, due_day, and category are required' });
   }
   const result = db.prepare(
-    'INSERT INTO bills (name, amount, due_day, category, is_autopay) VALUES (?, ?, ?, ?, ?)'
-  ).run(name, amount, due_day, category, is_autopay ? 1 : 0);
+    'INSERT INTO bills (name, amount, due_day, category, is_autopay, merchant_pattern) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(name, amount, due_day, category, is_autopay ? 1 : 0, merchant_pattern || null);
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
 router.put('/:id', (req, res) => {
-  const { name, amount, due_day, category, is_autopay } = req.body;
+  const { name, amount, due_day, category, is_autopay, merchant_pattern } = req.body;
   db.prepare(
-    'UPDATE bills SET name=?, amount=?, due_day=?, category=?, is_autopay=? WHERE id=?'
-  ).run(name, amount, due_day, category, is_autopay ? 1 : 0, req.params.id);
+    'UPDATE bills SET name=?, amount=?, due_day=?, category=?, is_autopay=?, merchant_pattern=? WHERE id=?'
+  ).run(name, amount, due_day, category, is_autopay ? 1 : 0, merchant_pattern || null, req.params.id);
   res.json({ message: 'Bill updated' });
 });
 
@@ -67,6 +67,43 @@ router.post('/:id/payment', (req, res) => {
     ).run(billId, month, year, 'paid', new Date().toISOString().split('T')[0]);
     res.json({ status: 'paid' });
   }
+});
+
+// Run auto-match for a given month
+router.post('/auto-match', (req, res) => {
+  const month = parseInt(req.body.month) || new Date().getMonth() + 1;
+  const year = parseInt(req.body.year) || new Date().getFullYear();
+  const prefix = `${year}-${String(month).padStart(2, '0')}`;
+
+  const bills = db.prepare("SELECT * FROM bills WHERE merchant_pattern IS NOT NULL AND merchant_pattern != ''").all();
+  let matched = 0;
+
+  for (const bill of bills) {
+    const pattern = `%${bill.merchant_pattern.toLowerCase()}%`;
+    const expense = db.prepare(`
+      SELECT id FROM expenses
+      WHERE (LOWER(merchant_name) LIKE ? OR LOWER(description) LIKE ?)
+        AND date LIKE ?
+        AND (is_transfer IS NULL OR is_transfer = 0)
+      LIMIT 1
+    `).get(pattern, pattern, `${prefix}%`);
+
+    if (!expense) continue;
+
+    const existing = db.prepare(
+      'SELECT id, source FROM bill_payments WHERE bill_id = ? AND month = ? AND year = ?'
+    ).get(bill.id, month, year);
+
+    if (!existing) {
+      db.prepare(`
+        INSERT INTO bill_payments (bill_id, month, year, status, paid_on, source)
+        VALUES (?, ?, ?, 'paid', ?, 'plaid')
+      `).run(bill.id, month, year, `${prefix}-01`);
+      matched++;
+    }
+  }
+
+  res.json({ matched, month, year });
 });
 
 // Get bill payment history
