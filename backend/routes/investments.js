@@ -156,16 +156,28 @@ router.get('/summary', (req, res) => {
   const mortgage = db.prepare('SELECT remaining_balance FROM mortgage LIMIT 1').get();
   const debts = db.prepare('SELECT SUM(current_balance) as total FROM debts WHERE is_active=1').get();
 
+  // Plaid investment holdings
+  const plaidHoldings = db.prepare('SELECT quantity, close_price FROM plaid_holdings').all();
+  const plaidHoldingsValue = plaidHoldings.reduce(
+    (s, h) => s + (h.quantity && h.close_price ? h.quantity * h.close_price : 0), 0
+  );
+
+  // Plaid credit/loan balances as liabilities
+  const plaidLiabilities = db.prepare(
+    "SELECT SUM(balance_current) as total FROM plaid_accounts WHERE type IN ('credit', 'loan')"
+  ).get();
+
   const stockValue = stocks.reduce((s, st) => s + st.shares * (st.current_price || st.purchase_price), 0);
   const retirementBalance = retirement.reduce((s, a) => s + a.balance, 0);
   const hsaBalance = hsaFsa.reduce((s, a) => s + a.balance, 0);
-  const totalAssets = stockValue + retirementBalance + hsaBalance;
-  const totalLiabilities = (mortgage?.remaining_balance || 0) + (debts?.total || 0);
+  const totalAssets = stockValue + retirementBalance + hsaBalance + plaidHoldingsValue;
+  const totalLiabilities = (mortgage?.remaining_balance || 0) + (debts?.total || 0) + (plaidLiabilities?.total || 0);
 
   res.json({
     stockValue,
     retirementBalance,
     hsaBalance,
+    plaidHoldingsValue,
     totalAssets,
     totalLiabilities,
     netWorth: totalAssets - totalLiabilities,

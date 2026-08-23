@@ -308,6 +308,25 @@ function initializeDatabase() {
     db.exec("ALTER TABLE plaid_accounts ADD COLUMN balance_last_updated TEXT");
   }
 
+  // Plaid investment holdings cache
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plaid_holdings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      security_id TEXT,
+      name TEXT,
+      ticker TEXT,
+      quantity REAL,
+      close_price REAL,
+      cost_basis REAL,
+      type TEXT,
+      last_updated TEXT DEFAULT (datetime('now')),
+      UNIQUE(account_id, security_id),
+      FOREIGN KEY (item_id) REFERENCES plaid_items(item_id) ON DELETE CASCADE
+    )
+  `);
+
   // Migrate bills — add merchant pattern for auto-matching
   const billCols = db.prepare('PRAGMA table_info(bills)').all().map(c => c.name);
   if (!billCols.includes('merchant_pattern')) {

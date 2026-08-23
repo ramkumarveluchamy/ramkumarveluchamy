@@ -446,6 +446,122 @@ router.post('/reauth/:item_id', async (req, res) => {
   }
 });
 
+// ─── POST /api/plaid/sync-holdings ───────────────────────────────────────────
+
+router.post('/sync-holdings', async (req, res) => {
+  const items = db.prepare("SELECT * FROM plaid_items WHERE status = 'active'").all();
+  if (!items.length) return res.status(404).json({ error: 'No active connected accounts' });
+
+  const client = getPlaidClient();
+  let totalSynced = 0;
+  const errors = [];
+
+  const upsertHolding = db.prepare(`
+    INSERT INTO plaid_holdings (item_id, account_id, security_id, name, ticker, quantity, close_price, cost_basis, type, last_updated)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(account_id, security_id) DO UPDATE SET
+      quantity = excluded.quantity,
+      close_price = excluded.close_price,
+      cost_basis = excluded.cost_basis,
+      last_updated = excluded.last_updated
+  `);
+
+  for (const item of items) {
+    try {
+      const resp = await client.investmentsHoldingsGet({ access_token: item.access_token });
+      const { holdings, securities } = resp.data;
+
+      const secMap = {};
+      for (const sec of securities) secMap[sec.security_id] = sec;
+
+      // Clear old holdings for this item then reinsert fresh
+      db.prepare('DELETE FROM plaid_holdings WHERE item_id = ?').run(item.item_id);
+
+      const insertMany = db.transaction(() => {
+        for (const h of holdings) {
+          const sec = secMap[h.security_id] || {};
+          upsertHolding.run(
+            item.item_id,
+            h.account_id,
+            h.security_id,
+            sec.name || null,
+            sec.ticker_symbol || null,
+            h.quantity,
+            h.institution_price || sec.close_price || null,
+            h.cost_basis || null,
+            sec.type || null
+          );
+          totalSynced++;
+        }
+      });
+      insertMany();
+    } catch (err) {
+      const code = err.response?.data?.error_code;
+      if (code === 'PRODUCT_NOT_READY' || code === 'PRODUCTS_NOT_SUPPORTED') {
+        // Institution doesn't support investments — skip silently
+        continue;
+      }
+      errors.push(`${item.institution_name}: ${err.response?.data?.error_message || err.message}`);
+    }
+  }
+
+  res.json({ synced: totalSynced, errors });
+});
+
+// ─── GET /api/plaid/holdings ──────────────────────────────────────────────────
+
+router.get('/holdings', (req, res) => {
+  const items = db.prepare('SELECT item_id, institution_name FROM plaid_items').all();
+  const instMap = {};
+  for (const i of items) instMap[i.item_id] = i.institution_name;
+
+  const holdings = db.prepare(`
+    SELECT h.*, a.name as account_name, a.subtype as account_subtype
+    FROM plaid_holdings h
+    LEFT JOIN plaid_accounts a ON h.account_id = a.account_id
+    ORDER BY h.item_id, (h.quantity * COALESCE(h.close_price, 0)) DESC
+  `).all();
+
+  const enriched = holdings.map(h => ({
+    ...h,
+    institution_name: instMap[h.item_id] || 'Unknown',
+    value: h.quantity && h.close_price ? h.quantity * h.close_price : null,
+    gain: h.cost_basis && h.quantity && h.close_price
+      ? (h.quantity * h.close_price) - h.cost_basis
+      : null,
+  }));
+
+  const totalValue = enriched.reduce((s, h) => s + (h.value || 0), 0);
+
+  res.json({ holdings: enriched, totalValue });
+});
+
+// ─── GET /api/plaid/liabilities ───────────────────────────────────────────────
+
+router.get('/liabilities', (req, res) => {
+  // Derive liabilities from already-synced plaid_accounts (type credit/loan)
+  // plus optional mortgage from the mortgage table
+  const creditAccounts = db.prepare(`
+    SELECT pa.account_id, pa.name, pa.subtype, pa.mask,
+           pa.balance_current, pa.balance_limit, pa.balance_last_updated,
+           pi.institution_name
+    FROM plaid_accounts pa
+    JOIN plaid_items pi ON pa.item_id = pi.item_id
+    WHERE pa.type IN ('credit', 'loan')
+    ORDER BY pi.institution_name, pa.name
+  `).all();
+
+  const totalCredit = creditAccounts
+    .filter(a => a.subtype === 'credit card')
+    .reduce((s, a) => s + (a.balance_current || 0), 0);
+
+  const totalLoans = creditAccounts
+    .filter(a => a.subtype !== 'credit card')
+    .reduce((s, a) => s + (a.balance_current || 0), 0);
+
+  res.json({ accounts: creditAccounts, totalCredit, totalLoans });
+});
+
 // ─── DELETE /api/plaid/accounts/:item_id ─────────────────────────────────────
 
 router.delete('/accounts/:item_id', async (req, res) => {

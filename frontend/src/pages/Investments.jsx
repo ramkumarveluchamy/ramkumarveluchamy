@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Pencil, Trash2, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
+import { Plus, Pencil, Trash2, TrendingUp, TrendingDown, RefreshCw, Landmark, CreditCard } from 'lucide-react';
 import api from '../api/client';
 import Modal from '../components/Modal';
 import { format } from 'date-fns';
@@ -181,11 +181,14 @@ function HsaFsaForm({ initial, onSave, onClose }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function Investments() {
-  const [tab, setTab] = useState('stocks');
+  const [tab, setTab] = useState('plaid');
   const [stocks, setStocks] = useState({ items: [], totalValue: 0, totalCost: 0, totalGain: 0 });
   const [retirement, setRetirement] = useState({ items: [], totalBalance: 0, totalContributions: 0, totalMatch: 0 });
   const [hsaFsa, setHsaFsa] = useState({ items: [], totalBalance: 0 });
   const [summary, setSummary] = useState(null);
+  const [plaidHoldings, setPlaidHoldings] = useState({ holdings: [], totalValue: 0 });
+  const [plaidLiabilities, setPlaidLiabilities] = useState({ accounts: [], totalCredit: 0, totalLoans: 0 });
+  const [syncingHoldings, setSyncingHoldings] = useState(false);
   const [modal, setModal] = useState(null);
   const [priceEdit, setPriceEdit] = useState({});
 
@@ -194,9 +197,22 @@ export default function Investments() {
     api.get('/investments/retirement').then(r => setRetirement(r.data));
     api.get('/investments/hsa-fsa').then(r => setHsaFsa(r.data));
     api.get('/investments/summary').then(r => setSummary(r.data));
+    api.get('/plaid/holdings').then(r => setPlaidHoldings(r.data)).catch(() => {});
+    api.get('/plaid/liabilities').then(r => setPlaidLiabilities(r.data)).catch(() => {});
   };
 
   useEffect(load, []);
+
+  const handleSyncHoldings = async () => {
+    setSyncingHoldings(true);
+    try {
+      await api.post('/plaid/sync-holdings');
+      await Promise.all([
+        api.get('/plaid/holdings').then(r => setPlaidHoldings(r.data)),
+        api.get('/investments/summary').then(r => setSummary(r.data)),
+      ]);
+    } catch {} finally { setSyncingHoldings(false); }
+  };
 
   const handleSaveStock = async form => {
     if (modal?.edit) await api.put(`/investments/stocks/${modal.edit.id}`, form);
@@ -221,6 +237,7 @@ export default function Investments() {
   };
 
   const tabs = [
+    { id: 'plaid', label: 'Connected Accounts' },
     { id: 'stocks', label: 'Stocks & Brokerage' },
     { id: 'retirement', label: 'Retirement (401K/IRA)' },
     { id: 'hsa', label: 'HSA / FSA' },
@@ -232,7 +249,13 @@ export default function Investments() {
 
       {/* Net Worth Summary */}
       {summary && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          {summary.plaidHoldingsValue > 0 && (
+            <div className="card">
+              <div className="text-xs text-gray-500">Plaid Holdings</div>
+              <div className="text-xl font-bold text-teal-600">${summary.plaidHoldingsValue.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
+            </div>
+          )}
           <div className="card">
             <div className="text-xs text-gray-500">Stock Portfolio</div>
             <div className="text-xl font-bold text-blue-600">${summary.stockValue.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
@@ -250,7 +273,7 @@ export default function Investments() {
             <div className={`text-xl font-bold ${summary.netWorth >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               ${summary.netWorth.toLocaleString('en-US', {maximumFractionDigits: 0})}
             </div>
-            <div className="text-xs text-gray-400 mt-1">Assets - Debts & Mortgage</div>
+            <div className="text-xs text-gray-400 mt-1">Assets − Debts & Liabilities</div>
           </div>
         </div>
       )}
@@ -264,6 +287,112 @@ export default function Investments() {
             }`}>{t.label}</button>
         ))}
       </div>
+
+      {/* ── Plaid Connected Accounts Tab ── */}
+      {tab === 'plaid' && (
+        <div className="space-y-6">
+          {/* Holdings */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-teal-600" /> Investment Holdings
+              </h2>
+              <button onClick={handleSyncHoldings} disabled={syncingHoldings}
+                className="btn-secondary flex items-center gap-2 text-sm">
+                <RefreshCw className={`w-4 h-4 ${syncingHoldings ? 'animate-spin' : ''}`} />
+                {syncingHoldings ? 'Syncing…' : 'Sync Holdings'}
+              </button>
+            </div>
+
+            {plaidHoldings.holdings.length === 0 ? (
+              <div className="card text-center py-10 text-gray-400">
+                <TrendingUp className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No holdings synced yet</p>
+                <p className="text-sm mt-1">Click "Sync Holdings" to pull investment data from your connected accounts, or connect a brokerage account via <a href="/finance/plaid" className="text-blue-600">Connected Banks</a>.</p>
+              </div>
+            ) : (
+              <div className="card overflow-x-auto">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-sm text-gray-500">{plaidHoldings.holdings.length} holdings</span>
+                  <span className="font-bold text-teal-600">${plaidHoldings.totalValue.toLocaleString('en-US', {maximumFractionDigits: 0})} total</span>
+                </div>
+                <table className="w-full text-sm">
+                  <thead><tr className="border-b dark:border-gray-700 text-left text-gray-500">
+                    <th className="pb-2 font-medium">Security</th>
+                    <th className="pb-2 font-medium">Account</th>
+                    <th className="pb-2 font-medium text-right">Qty</th>
+                    <th className="pb-2 font-medium text-right">Price</th>
+                    <th className="pb-2 font-medium text-right">Value</th>
+                    <th className="pb-2 font-medium text-right">Gain/Loss</th>
+                  </tr></thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                    {plaidHoldings.holdings.map((h, i) => (
+                      <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                        <td className="py-2.5">
+                          <div className="font-semibold">{h.ticker || '—'}</div>
+                          <div className="text-xs text-gray-400 truncate max-w-[140px]">{h.name}</div>
+                        </td>
+                        <td className="py-2.5 text-xs text-gray-500">
+                          <div>{h.institution_name}</div>
+                          <div className="text-gray-400">{h.account_name}</div>
+                        </td>
+                        <td className="py-2.5 text-right">{h.quantity?.toFixed(4)}</td>
+                        <td className="py-2.5 text-right">{h.close_price ? `$${h.close_price.toFixed(2)}` : '—'}</td>
+                        <td className="py-2.5 text-right font-semibold">
+                          {h.value != null ? `$${h.value.toLocaleString('en-US', {maximumFractionDigits: 0})}` : '—'}
+                        </td>
+                        <td className={`py-2.5 text-right ${h.gain == null ? 'text-gray-400' : h.gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {h.gain != null ? `${h.gain >= 0 ? '+' : ''}$${h.gain.toFixed(0)}` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Liabilities */}
+          <div className="space-y-3">
+            <h2 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <CreditCard className="w-5 h-5 text-orange-500" /> Connected Liabilities
+            </h2>
+            {plaidLiabilities.accounts.length === 0 ? (
+              <div className="card text-center py-8 text-gray-400 text-sm">
+                No credit or loan accounts connected via Plaid.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex gap-4 text-sm mb-2">
+                  <span>Credit Cards: <strong className="text-orange-600">${plaidLiabilities.totalCredit.toLocaleString('en-US', {maximumFractionDigits: 0})}</strong></span>
+                  {plaidLiabilities.totalLoans > 0 && (
+                    <span>Loans: <strong className="text-red-600">${plaidLiabilities.totalLoans.toLocaleString('en-US', {maximumFractionDigits: 0})}</strong></span>
+                  )}
+                </div>
+                {plaidLiabilities.accounts.map(acct => (
+                  <div key={acct.account_id} className="card flex items-center justify-between py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center">
+                        <CreditCard className="w-4 h-4 text-orange-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-sm text-gray-900 dark:text-white">{acct.name}</p>
+                        <p className="text-xs text-gray-400">{acct.institution_name} · {acct.subtype} {acct.mask ? `••••${acct.mask}` : ''}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold text-orange-600">${(acct.balance_current || 0).toLocaleString('en-US', {maximumFractionDigits: 0})}</p>
+                      {acct.balance_limit && (
+                        <p className="text-xs text-gray-400">of ${acct.balance_limit.toLocaleString()} limit</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Stocks Tab ── */}
       {tab === 'stocks' && (
