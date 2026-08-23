@@ -6,8 +6,8 @@ const { authenticate } = require('../middleware/auth');
 router.use(authenticate);
 
 router.get('/', (req, res) => {
-  const { month, year, category, startDate, endDate } = req.query;
-  let query = 'SELECT * FROM expenses WHERE 1=1';
+  const { month, year, category, startDate, endDate, needs_review } = req.query;
+  let query = 'SELECT * FROM expenses WHERE (is_transfer IS NULL OR is_transfer = 0)';
   const params = [];
 
   if (month && year) {
@@ -18,11 +18,15 @@ router.get('/', (req, res) => {
   if (startDate) { query += ' AND date >= ?'; params.push(startDate); }
   if (endDate) { query += ' AND date <= ?'; params.push(endDate); }
   if (category) { query += ' AND category = ?'; params.push(category); }
+  if (needs_review === '1') { query += " AND source = 'plaid' AND (is_reviewed IS NULL OR is_reviewed = 0)"; }
 
   query += ' ORDER BY date DESC';
   const rows = db.prepare(query).all(...params);
   const total = rows.reduce((sum, r) => sum + r.amount, 0);
-  res.json({ items: rows, total });
+  const unreviewedCount = db.prepare(
+    "SELECT COUNT(*) as n FROM expenses WHERE source='plaid' AND (is_reviewed IS NULL OR is_reviewed=0) AND (is_transfer IS NULL OR is_transfer=0)"
+  ).get().n;
+  res.json({ items: rows, total, unreviewedCount });
 });
 
 router.post('/', (req, res) => {
@@ -74,6 +78,25 @@ router.get('/groceries', (req, res) => {
   const rows = db.prepare(query).all(...params);
   const total = rows.reduce((sum, r) => sum + r.amount, 0);
   res.json({ items: rows, total });
+});
+
+// Inline recategorize (sets user_category_override=1 so sync won't overwrite)
+router.patch('/:id/category', (req, res) => {
+  const { category } = req.body;
+  if (!category) return res.status(400).json({ error: 'category required' });
+  db.prepare(
+    'UPDATE expenses SET category=?, user_category_override=1 WHERE id=?'
+  ).run(category, req.params.id);
+  res.json({ category });
+});
+
+// Toggle reviewed status
+router.patch('/:id/review', (req, res) => {
+  const row = db.prepare('SELECT is_reviewed FROM expenses WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const next = row.is_reviewed ? 0 : 1;
+  db.prepare('UPDATE expenses SET is_reviewed=? WHERE id=?').run(next, req.params.id);
+  res.json({ is_reviewed: next });
 });
 
 router.post('/groceries', (req, res) => {

@@ -327,6 +327,14 @@ function initializeDatabase() {
     )
   `);
 
+  // Migrate expenses and income — add review status
+  if (!expenseCols.includes('is_reviewed')) {
+    db.exec("ALTER TABLE expenses ADD COLUMN is_reviewed INTEGER DEFAULT 0");
+  }
+  if (!incomeCols.includes('is_reviewed')) {
+    db.exec("ALTER TABLE income ADD COLUMN is_reviewed INTEGER DEFAULT 0");
+  }
+
   // Migrate bills — add merchant pattern for auto-matching
   const billCols = db.prepare('PRAGMA table_info(bills)').all().map(c => c.name);
   if (!billCols.includes('merchant_pattern')) {
